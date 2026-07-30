@@ -24,16 +24,16 @@
   }
   .cell-bg {
     position: absolute;
-    width: 73px;
-    height: 84px;
+    width: 64px;
+    height: 74px;
     background: var(--cell-bg);
     border: 1px solid var(--cell-border);
   }
   .tile {
-    width: 73px;
-    height: 84px;
+    width: 64px;
+    height: 74px;
     border-radius: 0;
-    font-size: 26px;
+    font-size: 24px;
   }
 
   #dirpad {
@@ -110,9 +110,11 @@
   } = ThreesCommon;
 
   const RADIUS = 2;
-  const HEX_SIZE = 42;             // circumradius in px
-  const HEX_W = HEX_SIZE * Math.sqrt(3);
-  const HEX_H = HEX_SIZE * 2;
+  const HEX_SIZE = 42;              // circumradius used for cell-to-cell spacing (the "pitch")
+  const HEX_RENDER = 37;            // circumradius actually drawn; smaller than the pitch so a
+                                     // gap shows on all 6 sides, matching the square grid's look
+  const HEX_W = HEX_RENDER * Math.sqrt(3);
+  const HEX_H = HEX_RENDER * 2;
   const BOARD_PAD = 16;
   const SLIDE_MS = 130;
   const WINNER_FLIP_MS = 260;
