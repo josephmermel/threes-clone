@@ -59,7 +59,7 @@
   #dirpad button {
     border: none;
     border-radius: 8px;
-    background: rgba(255,255,255,0.15);
+    background: rgba(255,255,255,0.35);
     color: inherit;
     font-size: 15px;
     font-weight: 700;
@@ -136,8 +136,9 @@
   const LOSER_FLIP_MS = SLIDE_MS + 20;
   const WILDCARD_CHANCE = 0.05;
   const TRIPLE_HINT_CHANCE = 0.6;
-  const BONUS_MIN_MAX = 24;
-  const BONUS_CHANCE = 0.08;
+  const BONUS_MIN_MAX = 6;
+  const BONUS_CHANCE = 0.12;
+  const STARTER_SIX_CHANCE = 0.15; // chance a starting tile is a 6 instead of a plain 1/2/3 draw
 
   const boardEl = document.getElementById('board');
   const nextIndicatorEl = document.getElementById('next-indicator');
@@ -258,11 +259,16 @@
   let elById;     // id -> DOM element
   let idCounter;
   let nextValue;
+  let recordMax;  // highest tile value seen so far this game, for milestone celebrations
   let deck = [];
 
   function drawValue() {
     if (deck.length === 0) deck = shuffledBag();
     return deck.pop();
+  }
+
+  function drawStarterValue() {
+    return Math.random() < STARTER_SIX_CHANCE ? 6 : drawValue();
   }
 
   function drawNextValue() {
@@ -354,7 +360,7 @@
 
     const starterIds = [];
     for (let i = 0; i < 5; i++) {
-      const id = placeRandomTile(drawValue());
+      const id = placeRandomTile(drawStarterValue());
       if (id) starterIds.push(id);
     }
     for (const id of starterIds) {
@@ -363,6 +369,7 @@
       boardEl.appendChild(el);
       elById.set(id, el);
     }
+    recordMax = currentMaxValue(tileValue); // don't celebrate reaching a value the starters already had
 
     nextValue = drawNextValue();
     renderNextIndicator(nextIndicatorEl, nextValue, TRIPLE_HINT_CHANCE);
@@ -410,9 +417,17 @@
       nextValue = drawNextValue();
     }
 
+    // A merge that just set a new game-high tile gets a bigger celebratory pop.
+    let milestoneIds = null;
+    const newMax = currentMaxValue(tileValue);
+    if (newMax > recordMax) {
+      milestoneIds = new Set(result.allMerges.filter(m => m.newValue === newMax).map(m => m.winnerId));
+      recordMax = newMax;
+    }
+
     animateMove({
       elById, tileValue, tilePos, allMerges: result.allMerges, loserFinalPos: result.loserFinalPos, spawnedId,
-      boardEl, cellPos, createTileEl: makeTileEl,
+      boardEl, cellPos, createTileEl: makeTileEl, milestoneIds,
       slideMs: SLIDE_MS, winnerFlipMs: WINNER_FLIP_MS, loserFlipMs: LOSER_FLIP_MS,
     });
     renderNextIndicator(nextIndicatorEl, nextValue, TRIPLE_HINT_CHANCE);

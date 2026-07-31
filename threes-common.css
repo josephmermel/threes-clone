@@ -15,7 +15,7 @@ body {
   background-color: var(--page-bg);
   transition: background-color 0.6s ease;
   font-family: -apple-system, BlinkMacSystemFont, "Helvetica Neue", Arial, sans-serif;
-  color: #f4f1e9;
+  color: #241f1a;
   -webkit-user-select: none;
   user-select: none;
   touch-action: none;
@@ -110,6 +110,31 @@ button.game-btn:active { transform: scale(0.96); }
 }
 .tile.merging { animation: mergePop 0.13s ease-out; z-index: 2; }
 
+/* A merge that sets a new high tile for this game gets a bigger bounce plus a
+   radial glow burst (a separate element, so it never fights the tile's own
+   box-shadow/filter/clip-path). transform+opacity only, so it's identical on
+   the square board and the clip-path hex tiles. */
+@keyframes milestonePop {
+  0%   { transform: scale(1); }
+  35%  { transform: scale(1.5); }
+  65%  { transform: scale(0.94); }
+  100% { transform: scale(1); }
+}
+.tile.milestone-pop { animation: milestonePop 0.32s ease-out; z-index: 4; }
+
+@keyframes milestoneGlow {
+  0%   { transform: scale(0.7); opacity: 0.95; }
+  100% { transform: scale(2.4); opacity: 0; }
+}
+.milestone-glow {
+  position: absolute;
+  border-radius: 50%;
+  background: radial-gradient(circle, rgba(255,255,255,0.95) 0%, rgba(255,255,255,0) 70%);
+  animation: milestoneGlow 0.6s ease-out;
+  pointer-events: none;
+  z-index: 4;
+}
+
 /* Drag-preview only: the pixels where a sliding tile currently overlaps its
    merge target, filled with the *result* tile's color instead of a plain
    blend, so you can see what it's about to become before committing. */
@@ -159,6 +184,7 @@ button.game-btn:active { transform: scale(0.96); }
   position: absolute;
   inset: 0;
   background: rgba(20, 30, 38, 0.88);
+  color: #f4f1e9;
   border-radius: 10px;
   display: flex;
   flex-direction: column;

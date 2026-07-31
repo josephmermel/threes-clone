@@ -120,9 +120,10 @@
     return max;
   }
 
-  // A random tile from the doubling chain 6,12,24,..., capped at half the board's largest tile.
+  // A random tile from the doubling chain 6,12,24,..., capped at the board's
+  // largest tile so far (so a bonus spawn can rise to meet it, never pass it).
   function randomBonusValue(maxVal) {
-    const cap = Math.max(6, Math.floor(maxVal / 2));
+    const cap = Math.max(6, maxVal);
     const chain = [];
     for (let v = 6; v <= cap; v *= 2) chain.push(v);
     return pickRandom(chain);
@@ -215,6 +216,19 @@
     document.documentElement.style.setProperty('--page-bg', `color-mix(in srgb, ${tileBg} 50%, white)`);
   }
 
+  // A one-shot radial glow burst over a tile that just became a new game-high,
+  // as a separate element so it never fights the tile's own box-shadow/filter.
+  function spawnMilestoneGlow(tileEl, boardEl) {
+    const glow = document.createElement('div');
+    glow.className = 'milestone-glow';
+    glow.style.left = tileEl.style.left;
+    glow.style.top = tileEl.style.top;
+    glow.style.width = tileEl.style.width || getComputedStyle(tileEl).width;
+    glow.style.height = tileEl.style.height || getComputedStyle(tileEl).height;
+    boardEl.appendChild(glow);
+    setTimeout(() => glow.remove(), 650);
+  }
+
   // Animates one move's result: losers slide into their winner's cell and fade/flip away,
   // survivors (incl. merge winners) glide to their new cell and pop/flip, and the freshly
   // spawned tile fades in. Generic over board shape via the cellPos/createTileEl callbacks.
@@ -223,10 +237,12 @@
   //   boardEl: container to append the spawned tile into
   //   cellPos(a, b): -> {left, top} in px
   //   createTileEl(value, a, b, spawning): -> new DOM el, already positioned
+  //   milestoneIds: optional Set<id> of merge winners that just set a new game-high
+  //     tile — these get a bigger pop plus a radial glow burst instead of the plain pop
   function animateMove(ctx) {
     const {
       elById, tileValue, tilePos, allMerges, loserFinalPos, spawnedId,
-      boardEl, cellPos, createTileEl,
+      boardEl, cellPos, createTileEl, milestoneIds,
       slideMs = 130, winnerFlipMs = 260, loserFlipMs = slideMs + 20,
     } = ctx;
     const winnerMeta = new Map(allMerges.map(m => [m.winnerId, m]));
@@ -277,11 +293,13 @@
         }, slideMs);
       } else if (meta) {
         const value = tileValue[id];
+        const isMilestone = milestoneIds && milestoneIds.has(id);
         setTimeout(() => {
           paintTile(el, value);
-          el.classList.remove('merging');
+          el.classList.remove('merging', 'milestone-pop');
           void el.offsetWidth;
-          el.classList.add('merging');
+          el.classList.add(isMilestone ? 'milestone-pop' : 'merging');
+          if (isMilestone) spawnMilestoneGlow(el, boardEl);
         }, slideMs);
       }
     }

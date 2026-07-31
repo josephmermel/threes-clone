@@ -77,8 +77,9 @@
   const LOSER_FLIP_MS = SLIDE_MS + 20;
   const WILDCARD_CHANCE = 0.06;
   const TRIPLE_HINT_CHANCE = 0.6; // for values > 3, how often to show an ambiguous triple instead of the exact value
-  const BONUS_MIN_MAX = 24;  // board needs at least this large a tile before bonus tiles can spawn
-  const BONUS_CHANCE = 0.08; // chance the next tile is a bonus (>3) tile once eligible
+  const BONUS_MIN_MAX = 6;   // board needs at least this large a tile before bonus tiles can spawn
+  const BONUS_CHANCE = 0.12; // chance the next tile is a bonus (>3) tile once eligible
+  const STARTER_SIX_CHANCE = 0.15; // chance a starting tile is a 6 instead of a plain 1/2/3 draw
 
   const boardEl = document.getElementById('board');
   const nextIndicatorEl = document.getElementById('next-indicator');
@@ -124,11 +125,16 @@
   let elById;     // id -> DOM element
   let idCounter;
   let nextValue;
+  let recordMax;  // highest tile value seen so far this game, for milestone celebrations
   let deck = [];
 
   function drawValue() {
     if (deck.length === 0) deck = shuffledBag();
     return deck.pop();
+  }
+
+  function drawStarterValue() {
+    return Math.random() < STARTER_SIX_CHANCE ? 6 : drawValue();
   }
 
   // Occasionally a wildcard, occasionally a rare bonus tile (>3) once the board has
@@ -230,7 +236,7 @@
 
     const starterIds = [];
     for (let i = 0; i < 5; i++) {
-      const id = placeRandomTile(drawValue());
+      const id = placeRandomTile(drawStarterValue());
       if (id) starterIds.push(id);
     }
     for (const id of starterIds) {
@@ -239,6 +245,7 @@
       boardEl.appendChild(el);
       elById.set(id, el);
     }
+    recordMax = currentMaxValue(tileValue); // don't celebrate reaching a value the starters already had
 
     nextValue = drawNextValue();
     renderNextIndicator(nextIndicatorEl, nextValue, TRIPLE_HINT_CHANCE);
@@ -285,9 +292,17 @@
       nextValue = drawNextValue();
     }
 
+    // A merge that just set a new game-high tile gets a bigger celebratory pop.
+    let milestoneIds = null;
+    const newMax = currentMaxValue(tileValue);
+    if (newMax > recordMax) {
+      milestoneIds = new Set(result.allMerges.filter(m => m.newValue === newMax).map(m => m.winnerId));
+      recordMax = newMax;
+    }
+
     animateMove({
       elById, tileValue, tilePos, allMerges: result.allMerges, loserFinalPos: result.loserFinalPos, spawnedId,
-      boardEl, cellPos, createTileEl: makeTileEl,
+      boardEl, cellPos, createTileEl: makeTileEl, milestoneIds,
       slideMs: SLIDE_MS, winnerFlipMs: WINNER_FLIP_MS, loserFlipMs: LOSER_FLIP_MS,
     });
     renderNextIndicator(nextIndicatorEl, nextValue, TRIPLE_HINT_CHANCE);
