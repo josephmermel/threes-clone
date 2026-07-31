@@ -477,6 +477,8 @@
     getTilePos: () => tilePos,
     getElById: () => elById,
     cellPos,
+    getTileSize: () => ({ width: HEX_W, height: HEX_H }),
+    overlayClass: 'hex-shape',
     commit: move,
   });
 

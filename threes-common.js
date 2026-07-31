@@ -312,19 +312,22 @@
   //   getTilePos(): current id -> [a,b] map (read fresh each call)
   //   getElById(): current id -> DOM element map (read fresh each call)
   //   cellPos(a, b): -> {left, top} in px
+  //   getTileSize(): -> {width, height} in px of one tile (for the merge-overlay math)
   //   commit(dir): perform the real, state-mutating move
   //   commitFraction: fraction of the pitch that must be crossed to commit (default 0.5)
   //   deadzone: px of initial movement before a direction is locked in (default 10)
+  //   overlayClass: extra class(es) added to the merge-preview overlay element, e.g.
+  //     to reuse a board's tile-shape clip-path (optional)
   function attachDragControls(opts) {
     const {
       boardEl, isBlocked, pickDirection, pitchForDir, unitForDir,
-      computeMoveResult, getTilePos, getElById, cellPos, commit,
-      commitFraction = 0.5, deadzone = 10,
+      computeMoveResult, getTilePos, getElById, cellPos, getTileSize, commit,
+      commitFraction = 0.5, deadzone = 10, overlayClass = '',
     } = opts;
 
-    let drag = null; // { startX, startY, dir, tiles, pitch, unit, t }
+    let drag = null; // { startX, startY, dir, preview, pitch, unit, t }
 
-    function buildPreviewTiles(dir) {
+    function buildPreview(dir) {
       const result = computeMoveResult(dir);
       if (!result.anyMoved) return null;
       const tilePos = getTilePos();
@@ -338,20 +341,57 @@
         tiles[id] = { el, from: cellPos(...tilePos[id]), to: cellPos(...toRC) };
         el.style.transition = 'none';
       }
-      return tiles;
+      // One overlay per merge pair present in this preview: as the losing tile
+      // slides toward its winner, this renders the pixels where they currently
+      // overlap in the *result* tile's color (e.g. two 3s overlap in the 6 color).
+      const overlays = [];
+      for (const m of result.allMerges) {
+        if (!tiles[m.winnerId] || !tiles[m.loserId]) continue;
+        const el = document.createElement('div');
+        el.className = ('merge-preview ' + overlayClass).trim();
+        el.style.background = tileColor(m.newValue).bg;
+        boardEl.appendChild(el);
+        overlays.push({ winnerId: m.winnerId, loserId: m.loserId, el });
+      }
+      return { tiles, overlays };
     }
 
-    function applyPreview(tiles, t) {
-      for (const id in tiles) {
-        const { el, from, to } = tiles[id];
+    function applyPreview(preview, t) {
+      for (const id in preview.tiles) {
+        const { el, from, to } = preview.tiles[id];
         el.style.left = (from.left + (to.left - from.left) * t) + 'px';
         el.style.top = (from.top + (to.top - from.top) * t) + 'px';
       }
+      if (preview.overlays.length) {
+        const { width, height } = getTileSize();
+        for (const ov of preview.overlays) {
+          const w = preview.tiles[ov.winnerId], l = preview.tiles[ov.loserId];
+          const wLeft = w.from.left + (w.to.left - w.from.left) * t;
+          const wTop = w.from.top + (w.to.top - w.from.top) * t;
+          const lLeft = l.from.left + (l.to.left - l.from.left) * t;
+          const lTop = l.from.top + (l.to.top - l.from.top) * t;
+          const ix1 = Math.max(wLeft, lLeft), iy1 = Math.max(wTop, lTop);
+          const ix2 = Math.min(wLeft + width, lLeft + width), iy2 = Math.min(wTop + height, lTop + height);
+          if (ix2 > ix1 && iy2 > iy1) {
+            ov.el.style.display = 'block';
+            ov.el.style.left = ix1 + 'px';
+            ov.el.style.top = iy1 + 'px';
+            ov.el.style.width = (ix2 - ix1) + 'px';
+            ov.el.style.height = (iy2 - iy1) + 'px';
+          } else {
+            ov.el.style.display = 'none';
+          }
+        }
+      }
+    }
+
+    function removeOverlays(preview) {
+      for (const ov of preview.overlays) ov.el.remove();
     }
 
     boardEl.addEventListener('pointerdown', (e) => {
       if (isBlocked()) return;
-      drag = { startX: e.clientX, startY: e.clientY, dir: null, tiles: null, t: 0 };
+      drag = { startX: e.clientX, startY: e.clientY, dir: null, preview: null, t: 0 };
       boardEl.setPointerCapture(e.pointerId);
     });
 
@@ -363,25 +403,26 @@
         drag.dir = pickDirection(dx, dy);
         drag.pitch = pitchForDir(drag.dir);
         drag.unit = unitForDir(drag.dir);
-        drag.tiles = buildPreviewTiles(drag.dir);
+        drag.preview = buildPreview(drag.dir);
       }
-      if (!drag.tiles) return;
+      if (!drag.preview) return;
       const along = dx * drag.unit.x + dy * drag.unit.y;
       drag.t = Math.max(0, Math.min(1, along / drag.pitch));
-      applyPreview(drag.tiles, drag.t);
+      applyPreview(drag.preview, drag.t);
     });
 
     function finish() {
       if (!drag) return;
-      const { dir, tiles, t } = drag;
+      const { dir, preview, t } = drag;
       drag = null;
-      if (!tiles) return;
-      for (const id in tiles) tiles[id].el.style.transition = '';
+      if (!preview) return;
+      removeOverlays(preview);
+      for (const id in preview.tiles) preview.tiles[id].el.style.transition = '';
       if (t >= commitFraction) {
         commit(dir);
       } else {
-        for (const id in tiles) {
-          const { el, from } = tiles[id];
+        for (const id in preview.tiles) {
+          const { el, from } = preview.tiles[id];
           el.style.left = from.left + 'px';
           el.style.top = from.top + 'px';
         }

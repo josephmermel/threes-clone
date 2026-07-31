@@ -110,6 +110,17 @@ button.game-btn:active { transform: scale(0.96); }
 }
 .tile.merging { animation: mergePop 0.13s ease-out; z-index: 2; }
 
+/* Drag-preview only: the pixels where a sliding tile currently overlaps its
+   merge target, filled with the *result* tile's color instead of a plain
+   blend, so you can see what it's about to become before committing. */
+.merge-preview {
+  position: absolute;
+  display: none;
+  border-radius: 8px;
+  z-index: 5;
+  pointer-events: none;
+}
+
 .tile.wild {
   background: linear-gradient(135deg, #7b2fbf, #d4af37 45%, #7b2fbf 90%);
   background-size: 240% 240%;
