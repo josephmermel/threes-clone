@@ -120,17 +120,19 @@
     currentMaxValue, randomBonusValue,
     resolveMove, isGameOver: commonIsGameOver,
     paintTile, renderNextIndicator, updatePageBackground, animateMove,
+    attachDragControls,
   } = ThreesCommon;
 
   const RADIUS = 2;
-  const HEX_SIZE = 42;              // circumradius used for cell-to-cell spacing (the "pitch")
-  const HEX_RENDER = 37;            // circumradius actually drawn; smaller than the pitch so a
-                                     // gap shows on all 6 sides, matching the square grid's look
-  const HEX_W = HEX_RENDER * Math.sqrt(3);
-  const HEX_H = HEX_RENDER * 2;
-  const BOARD_PAD = 16;
-  const SLIDE_MS = 130;
-  const WINNER_FLIP_MS = 260;
+  const BASE_HEX_SIZE = 42;   // circumradius used for cell-to-cell spacing (the "pitch")
+  const BASE_HEX_RENDER = 37; // circumradius actually drawn; smaller than the pitch so a
+                              // gap shows on all 6 sides, matching the square grid's look
+  const BASE_BOARD_PAD = 16;
+  let SCALE = 1, HEX_SIZE = BASE_HEX_SIZE, HEX_RENDER = BASE_HEX_RENDER, BOARD_PAD = BASE_BOARD_PAD;
+  let HEX_W = HEX_RENDER * Math.sqrt(3);
+  let HEX_H = HEX_RENDER * 2;
+  const SLIDE_MS = 80;
+  const WINNER_FLIP_MS = 170;
   const LOSER_FLIP_MS = SLIDE_MS + 20;
   const WILDCARD_CHANCE = 0.05;
   const TRIPLE_HINT_CHANCE = 0.6;
@@ -195,10 +197,11 @@
     }
   }
 
-  // Precompute each cell's pixel top-left (for a HEX_W x HEX_H box), normalized
-  // so the whole board sits at non-negative coordinates with BOARD_PAD margin.
-  const CELL_PIXEL = {};
-  {
+  // Each cell's pixel top-left (for a HEX_W x HEX_H box), normalized so the whole
+  // board sits at non-negative coordinates with BOARD_PAD margin. Recomputed
+  // whenever HEX_SIZE/HEX_RENDER/BOARD_PAD change (i.e. on responsive rescale).
+  let CELL_PIXEL = {};
+  function layoutHex() {
     let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
     const centers = {};
     for (const [q, r] of ALL_CELLS) {
@@ -210,11 +213,39 @@
     }
     const offsetX = -minX + HEX_W / 2 + BOARD_PAD;
     const offsetY = -minY + HEX_H / 2 + BOARD_PAD;
+    CELL_PIXEL = {};
     for (const key in centers) {
       CELL_PIXEL[key] = { left: centers[key].x + offsetX - HEX_W / 2, top: centers[key].y + offsetY - HEX_H / 2 };
     }
     boardEl.style.width = (maxX - minX + HEX_W + BOARD_PAD * 2) + 'px';
     boardEl.style.height = (maxY - minY + HEX_H + BOARD_PAD * 2) + 'px';
+  }
+
+  // Shrinks the whole board to fit narrow (mostly mobile) viewports instead of
+  // overflowing and forcing the page to be pinch-zoomed out to see it all.
+  function measureNaturalWidth() {
+    let minX = Infinity, maxX = -Infinity;
+    for (const [q, r] of ALL_CELLS) {
+      const x = BASE_HEX_SIZE * Math.sqrt(3) * (q + r / 2);
+      minX = Math.min(minX, x); maxX = Math.max(maxX, x);
+    }
+    return (maxX - minX) + BASE_HEX_RENDER * Math.sqrt(3) + BASE_BOARD_PAD * 2;
+  }
+  const NATURAL_WIDTH = measureNaturalWidth();
+
+  function computeScale() {
+    const available = window.innerWidth - 44; // ~ #app's horizontal padding
+    return Math.max(0.4, Math.min(1, available / NATURAL_WIDTH));
+  }
+
+  function applyBoardDimensions() {
+    SCALE = computeScale();
+    HEX_SIZE = BASE_HEX_SIZE * SCALE;
+    HEX_RENDER = BASE_HEX_RENDER * SCALE;
+    HEX_W = HEX_RENDER * Math.sqrt(3);
+    HEX_H = HEX_RENDER * 2;
+    BOARD_PAD = BASE_BOARD_PAD * SCALE;
+    layoutHex();
   }
 
   function cellPos(q, r) {
@@ -259,14 +290,44 @@
     return id;
   }
 
+  function scaleFont(el) {
+    el.style.fontSize = (parseFloat(el.style.fontSize) * SCALE) + 'px';
+  }
+
   function makeTileEl(value, q, r, spawning) {
     const el = document.createElement('div');
     el.className = 'tile hex-shape' + (spawning ? ' spawning' : '');
     paintTile(el, value);
+    scaleFont(el);
+    el.style.width = HEX_W + 'px';
+    el.style.height = HEX_H + 'px';
     const { left, top } = cellPos(q, r);
     el.style.left = left + 'px';
     el.style.top = top + 'px';
     return el;
+  }
+
+  let cellBgEls = []; // [{el, q, r}], tracked so a resize can reposition/resize them too
+
+  function relayoutAll() {
+    for (const { el, q, r } of cellBgEls) {
+      el.style.width = HEX_W + 'px';
+      el.style.height = HEX_H + 'px';
+      const { left, top } = cellPos(q, r);
+      el.style.left = left + 'px';
+      el.style.top = top + 'px';
+    }
+    if (!elById) return;
+    for (const [id, el] of elById) {
+      el.style.width = HEX_W + 'px';
+      el.style.height = HEX_H + 'px';
+      paintTile(el, tileValue[id]);
+      scaleFont(el);
+      const [q, r] = tilePos[id];
+      const { left, top } = cellPos(q, r);
+      el.style.left = left + 'px';
+      el.style.top = top + 'px';
+    }
   }
 
   function startGame() {
@@ -278,13 +339,17 @@
     deck = shuffledBag();
 
     boardEl.innerHTML = '';
+    cellBgEls = [];
     for (const [q, r] of ALL_CELLS) {
       const bg = document.createElement('div');
       bg.className = 'cell-bg hex-shape';
+      bg.style.width = HEX_W + 'px';
+      bg.style.height = HEX_H + 'px';
       const { left, top } = cellPos(q, r);
       bg.style.left = left + 'px';
       bg.style.top = top + 'px';
       boardEl.appendChild(bg);
+      cellBgEls.push({ el: bg, q, r });
     }
 
     const starterIds = [];
@@ -305,26 +370,31 @@
     overlayEl.classList.add('hidden');
   }
 
+  // Pure preview of what a move would do: no mutation of grid/tileValue/tilePos,
+  // so it's safe to call during a drag before the player has committed to it.
+  function computeMoveResult(dir) {
+    if (!LINES[dir]) return { anyMoved: false };
+    const { anyMoved, allMerges, newEntries } = resolveMove(grid, tileValue, LINES[dir]);
+    if (!anyMoved) return { anyMoved: false };
+    const newTilePos = {};
+    for (const [key, id] of newEntries) if (id != null) newTilePos[id] = parseKey(key);
+    const loserFinalPos = {};
+    for (const { winnerId, loserId } of allMerges) loserFinalPos[loserId] = newTilePos[winnerId];
+    return { anyMoved: true, allMerges, newEntries, newTilePos, loserFinalPos };
+  }
+
   function move(dir) {
     if (!overlayEl.classList.contains('hidden')) return;
-    if (!LINES[dir]) return;
 
-    const { anyMoved, allMerges, newEntries } = resolveMove(grid, tileValue, LINES[dir]);
-    if (!anyMoved) return;
+    const result = computeMoveResult(dir);
+    if (!result.anyMoved) return;
 
-    for (const { winnerId, loserId, newValue } of allMerges) {
+    for (const { winnerId, loserId, newValue } of result.allMerges) {
       tileValue[winnerId] = newValue;
       delete tileValue[loserId];
     }
-
-    grid = new Map(newEntries.filter(([, id]) => id != null));
-    tilePos = {};
-    for (const [key, id] of newEntries) if (id != null) tilePos[id] = parseKey(key);
-
-    const loserFinalPos = {};
-    for (const { winnerId, loserId } of allMerges) {
-      loserFinalPos[loserId] = tilePos[winnerId];
-    }
+    grid = new Map(result.newEntries.filter(([, id]) => id != null));
+    tilePos = result.newTilePos;
 
     const farEdgeKeys = LINES[dir].map(line => line[line.length - 1]).filter(k => !grid.get(k));
     const spawnCells = farEdgeKeys.length > 0 ? farEdgeKeys : emptyKeys();
@@ -341,7 +411,7 @@
     }
 
     animateMove({
-      elById, tileValue, tilePos, allMerges, loserFinalPos, spawnedId,
+      elById, tileValue, tilePos, allMerges: result.allMerges, loserFinalPos: result.loserFinalPos, spawnedId,
       boardEl, cellPos, createTileEl: makeTileEl,
       slideMs: SLIDE_MS, winnerFlipMs: WINNER_FLIP_MS, loserFlipMs: LOSER_FLIP_MS,
     });
@@ -353,6 +423,16 @@
       overlayEl.classList.remove('hidden');
     }
   }
+
+  applyBoardDimensions();
+  let resizeTimer = null;
+  window.addEventListener('resize', () => {
+    clearTimeout(resizeTimer);
+    resizeTimer = setTimeout(() => {
+      applyBoardDimensions();
+      relayoutAll();
+    }, 120);
+  });
 
   // --- Input handling: 6 directions instead of 4. ---
   const keyMap = {
@@ -382,17 +462,22 @@
     return best;
   }
 
-  let dragStart = null;
-  boardEl.addEventListener('pointerdown', (e) => {
-    dragStart = { x: e.clientX, y: e.clientY };
-  });
-  boardEl.addEventListener('pointerup', (e) => {
-    if (!dragStart) return;
-    const dx = e.clientX - dragStart.x;
-    const dy = e.clientY - dragStart.y;
-    dragStart = null;
-    if (Math.hypot(dx, dy) < 24) return;
-    move(nearestHexDir(dx, dy));
+  function unitForDir(dir) {
+    const rad = DIR_ANGLES[dir] * Math.PI / 180;
+    return { x: Math.cos(rad), y: Math.sin(rad) };
+  }
+
+  attachDragControls({
+    boardEl,
+    isBlocked: () => !overlayEl.classList.contains('hidden'),
+    pickDirection: nearestHexDir,
+    pitchForDir: () => HEX_SIZE * Math.sqrt(3), // same for all 6 directions in a regular hex grid
+    unitForDir,
+    computeMoveResult,
+    getTilePos: () => tilePos,
+    getElById: () => elById,
+    cellPos,
+    commit: move,
   });
 
   document.getElementById('restart-btn').addEventListener('click', startGame);

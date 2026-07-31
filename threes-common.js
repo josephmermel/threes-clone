@@ -295,6 +295,102 @@
     }
   }
 
+  // Real-Threes-style drag: as the pointer moves, tiles slide a proportional
+  // amount toward where the move would land (a live preview), with no game
+  // state committed yet. Release past `commitFraction` of one cell's pitch and
+  // the move completes; release short of it and everything glides back with
+  // nothing changed. Works for mouse and touch alike via Pointer Events.
+  //
+  //   boardEl:  element to listen on
+  //   isBlocked(): true while input should be ignored (e.g. game-over overlay up)
+  //   pickDirection(dx, dy): raw drag vector -> a direction name (or null)
+  //   pitchForDir(dir): px a tile travels for one full step in that direction
+  //   unitForDir(dir): {x, y} unit vector for that direction on screen
+  //   computeMoveResult(dir): pure preview of resolveMove — must return
+  //     { anyMoved:false } or { anyMoved:true, newTilePos, loserFinalPos, ... }
+  //     without mutating any real game state
+  //   getTilePos(): current id -> [a,b] map (read fresh each call)
+  //   getElById(): current id -> DOM element map (read fresh each call)
+  //   cellPos(a, b): -> {left, top} in px
+  //   commit(dir): perform the real, state-mutating move
+  //   commitFraction: fraction of the pitch that must be crossed to commit (default 0.5)
+  //   deadzone: px of initial movement before a direction is locked in (default 10)
+  function attachDragControls(opts) {
+    const {
+      boardEl, isBlocked, pickDirection, pitchForDir, unitForDir,
+      computeMoveResult, getTilePos, getElById, cellPos, commit,
+      commitFraction = 0.5, deadzone = 10,
+    } = opts;
+
+    let drag = null; // { startX, startY, dir, tiles, pitch, unit, t }
+
+    function buildPreviewTiles(dir) {
+      const result = computeMoveResult(dir);
+      if (!result.anyMoved) return null;
+      const tilePos = getTilePos();
+      const elById = getElById();
+      const tiles = {};
+      for (const id in tilePos) {
+        const el = elById.get(Number(id));
+        if (!el) continue;
+        const toRC = result.newTilePos[id] || result.loserFinalPos[id];
+        if (!toRC) continue;
+        tiles[id] = { el, from: cellPos(...tilePos[id]), to: cellPos(...toRC) };
+        el.style.transition = 'none';
+      }
+      return tiles;
+    }
+
+    function applyPreview(tiles, t) {
+      for (const id in tiles) {
+        const { el, from, to } = tiles[id];
+        el.style.left = (from.left + (to.left - from.left) * t) + 'px';
+        el.style.top = (from.top + (to.top - from.top) * t) + 'px';
+      }
+    }
+
+    boardEl.addEventListener('pointerdown', (e) => {
+      if (isBlocked()) return;
+      drag = { startX: e.clientX, startY: e.clientY, dir: null, tiles: null, t: 0 };
+      boardEl.setPointerCapture(e.pointerId);
+    });
+
+    boardEl.addEventListener('pointermove', (e) => {
+      if (!drag) return;
+      const dx = e.clientX - drag.startX, dy = e.clientY - drag.startY;
+      if (!drag.dir) {
+        if (Math.hypot(dx, dy) < deadzone) return;
+        drag.dir = pickDirection(dx, dy);
+        drag.pitch = pitchForDir(drag.dir);
+        drag.unit = unitForDir(drag.dir);
+        drag.tiles = buildPreviewTiles(drag.dir);
+      }
+      if (!drag.tiles) return;
+      const along = dx * drag.unit.x + dy * drag.unit.y;
+      drag.t = Math.max(0, Math.min(1, along / drag.pitch));
+      applyPreview(drag.tiles, drag.t);
+    });
+
+    function finish() {
+      if (!drag) return;
+      const { dir, tiles, t } = drag;
+      drag = null;
+      if (!tiles) return;
+      for (const id in tiles) tiles[id].el.style.transition = '';
+      if (t >= commitFraction) {
+        commit(dir);
+      } else {
+        for (const id in tiles) {
+          const { el, from } = tiles[id];
+          el.style.left = from.left + 'px';
+          el.style.top = from.top + 'px';
+        }
+      }
+    }
+    boardEl.addEventListener('pointerup', finish);
+    boardEl.addEventListener('pointercancel', finish);
+  }
+
   global.ThreesCommon = {
     WILD, shuffledBag, pickRandom, cellKey, parseKey,
     canMerge, partnerValue, mergeValue, collapseLineWithIds,
@@ -302,6 +398,6 @@
     currentMaxValue, randomBonusValue,
     RAINBOW_HUES, hueForValue, tileColor, paintNumeral, paintTile,
     miniFontSize, makePreviewTile, renderNextIndicator, updatePageBackground,
-    animateMove,
+    animateMove, attachDragControls,
   };
 })(window);

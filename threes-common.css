@@ -91,24 +91,24 @@ button.game-btn:active { transform: scale(0.96); }
   box-shadow: 0 3px 6px rgba(0,0,0,0.22);
   border: 1px solid rgba(0,0,0,0.12);
   z-index: 1;
-  transition: left 0.13s cubic-bezier(.32,.72,.35,1),
-              top 0.13s cubic-bezier(.32,.72,.35,1),
-              opacity 0.13s ease,
-              transform 0.13s ease;
+  transition: left 0.08s cubic-bezier(.32,.72,.35,1),
+              top 0.08s cubic-bezier(.32,.72,.35,1),
+              opacity 0.08s ease,
+              transform 0.08s ease;
 }
 
 @keyframes spawnFade {
   0%   { opacity: 0; }
   100% { opacity: 1; }
 }
-.tile.spawning { animation: spawnFade 0.3s ease-out; }
+.tile.spawning { animation: spawnFade 0.15s ease-out; }
 
 @keyframes mergePop {
   0%   { transform: scale(1); }
   40%  { transform: scale(1.22); }
   100% { transform: scale(1); }
 }
-.tile.merging { animation: mergePop 0.2s ease-out; z-index: 2; }
+.tile.merging { animation: mergePop 0.13s ease-out; z-index: 2; }
 
 .tile.wild {
   background: linear-gradient(135deg, #7b2fbf, #d4af37 45%, #7b2fbf 90%);
@@ -133,7 +133,7 @@ button.game-btn:active { transform: scale(0.96); }
   75%  { transform: rotateY(0deg) scale(1.2); }
   100% { transform: rotateY(0deg) scale(1); }
 }
-.tile.wild-winner-flip { animation: wildWinnerFlip 0.26s ease-out; z-index: 2; }
+.tile.wild-winner-flip { animation: wildWinnerFlip 0.17s ease-out; z-index: 2; }
 
 /* Wildcard reveals its matched number mid-slide, then merges away. */
 @keyframes wildLoserFlip {
@@ -142,7 +142,7 @@ button.game-btn:active { transform: scale(0.96); }
   60%  { transform: rotateY(90deg) scale(1); opacity: 1; }
   100% { transform: rotateY(0deg) scale(0.4); opacity: 0; }
 }
-.tile.wild-loser-flip { animation: wildLoserFlip 0.15s ease-in; z-index: 1; }
+.tile.wild-loser-flip { animation: wildLoserFlip 0.1s ease-in; z-index: 1; }
 
 #overlay {
   position: absolute;

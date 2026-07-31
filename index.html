@@ -65,13 +65,15 @@
     currentMaxValue, randomBonusValue,
     resolveMove, isGameOver: commonIsGameOver,
     paintTile, renderNextIndicator, updatePageBackground, animateMove,
+    attachDragControls,
   } = ThreesCommon;
 
   const SIZE = 4;
-  const CELL = 90;
-  const GAP = 12;
-  const SLIDE_MS = 130;
-  const WINNER_FLIP_MS = 260;
+  const BASE_CELL = 90;
+  const BASE_GAP = 12;
+  let SCALE = 1, CELL = BASE_CELL, GAP = BASE_GAP;
+  const SLIDE_MS = 80;
+  const WINNER_FLIP_MS = 170;
   const LOSER_FLIP_MS = SLIDE_MS + 20;
   const WILDCARD_CHANCE = 0.06;
   const TRIPLE_HINT_CHANCE = 0.6; // for values > 3, how often to show an ambiguous triple instead of the exact value
@@ -160,14 +162,55 @@
     return id;
   }
 
+  function scaleFont(el) {
+    el.style.fontSize = (parseFloat(el.style.fontSize) * SCALE) + 'px';
+  }
+
   function makeTileEl(value, r, c, spawning) {
     const el = document.createElement('div');
     el.className = 'tile' + (spawning ? ' spawning' : '');
     paintTile(el, value);
+    scaleFont(el);
+    el.style.width = CELL + 'px';
+    el.style.height = CELL + 'px';
     const { left, top } = cellPos(r, c);
     el.style.left = left + 'px';
     el.style.top = top + 'px';
     return el;
+  }
+
+  // Shrinks the whole board to fit narrow (mostly mobile) viewports instead of
+  // overflowing and forcing the page to be pinch-zoomed out to see it all.
+  function computeScale() {
+    const designWidth = SIZE * BASE_CELL + (SIZE + 1) * BASE_GAP;
+    const available = window.innerWidth - 44; // ~ #app's horizontal padding
+    return Math.max(0.4, Math.min(1, available / designWidth));
+  }
+
+  function applyBoardDimensions() {
+    SCALE = computeScale();
+    CELL = BASE_CELL * SCALE;
+    GAP = BASE_GAP * SCALE;
+    boardEl.style.gridTemplateColumns = `repeat(${SIZE}, ${CELL}px)`;
+    boardEl.style.gridTemplateRows = `repeat(${SIZE}, ${CELL}px)`;
+    boardEl.style.gap = GAP + 'px';
+    boardEl.style.padding = GAP + 'px';
+    boardEl.style.width = (SIZE * CELL + (SIZE + 1) * GAP) + 'px';
+    boardEl.style.height = (SIZE * CELL + (SIZE + 1) * GAP) + 'px';
+  }
+
+  function relayoutExistingTiles() {
+    if (!elById) return;
+    for (const [id, el] of elById) {
+      el.style.width = CELL + 'px';
+      el.style.height = CELL + 'px';
+      paintTile(el, tileValue[id]);
+      scaleFont(el);
+      const [r, c] = tilePos[id];
+      const { left, top } = cellPos(r, c);
+      el.style.left = left + 'px';
+      el.style.top = top + 'px';
+    }
   }
 
   function startGame() {
@@ -203,25 +246,30 @@
     overlayEl.classList.add('hidden');
   }
 
+  // Pure preview of what a move would do: no mutation of grid/tileValue/tilePos,
+  // so it's safe to call during a drag before the player has committed to it.
+  function computeMoveResult(dir) {
+    const { anyMoved, allMerges, newEntries } = resolveMove(grid, tileValue, LINES[dir]);
+    if (!anyMoved) return { anyMoved: false };
+    const newTilePos = {};
+    for (const [key, id] of newEntries) if (id != null) newTilePos[id] = parseKey(key);
+    const loserFinalPos = {};
+    for (const { winnerId, loserId } of allMerges) loserFinalPos[loserId] = newTilePos[winnerId];
+    return { anyMoved: true, allMerges, newEntries, newTilePos, loserFinalPos };
+  }
+
   function move(dir) {
     if (!overlayEl.classList.contains('hidden')) return;
 
-    const { anyMoved, allMerges, newEntries } = resolveMove(grid, tileValue, LINES[dir]);
-    if (!anyMoved) return;
+    const result = computeMoveResult(dir);
+    if (!result.anyMoved) return;
 
-    for (const { winnerId, loserId, newValue } of allMerges) {
+    for (const { winnerId, loserId, newValue } of result.allMerges) {
       tileValue[winnerId] = newValue;
       delete tileValue[loserId];
     }
-
-    grid = new Map(newEntries.filter(([, id]) => id != null));
-    tilePos = {};
-    for (const [key, id] of newEntries) if (id != null) tilePos[id] = parseKey(key);
-
-    const loserFinalPos = {};
-    for (const { winnerId, loserId } of allMerges) {
-      loserFinalPos[loserId] = tilePos[winnerId];
-    }
+    grid = new Map(result.newEntries.filter(([, id]) => id != null));
+    tilePos = result.newTilePos;
 
     const farEdgeKeys = LINES[dir].map(line => line[line.length - 1]).filter(k => !grid.get(k));
     const spawnCells = farEdgeKeys.length > 0 ? farEdgeKeys : emptyKeys();
@@ -238,7 +286,7 @@
     }
 
     animateMove({
-      elById, tileValue, tilePos, allMerges, loserFinalPos, spawnedId,
+      elById, tileValue, tilePos, allMerges: result.allMerges, loserFinalPos: result.loserFinalPos, spawnedId,
       boardEl, cellPos, createTileEl: makeTileEl,
       slideMs: SLIDE_MS, winnerFlipMs: WINNER_FLIP_MS, loserFlipMs: LOSER_FLIP_MS,
     });
@@ -251,8 +299,15 @@
     }
   }
 
-  boardEl.style.width = (SIZE * CELL + (SIZE + 1) * GAP) + 'px';
-  boardEl.style.height = (SIZE * CELL + (SIZE + 1) * GAP) + 'px';
+  applyBoardDimensions();
+  let resizeTimer = null;
+  window.addEventListener('resize', () => {
+    clearTimeout(resizeTimer);
+    resizeTimer = setTimeout(() => {
+      applyBoardDimensions();
+      relayoutExistingTiles();
+    }, 120);
+  });
 
   // --- Input handling ---
   const keyMap = {
@@ -267,22 +322,21 @@
     }
   });
 
-  let dragStart = null;
-  boardEl.addEventListener('pointerdown', (e) => {
-    dragStart = { x: e.clientX, y: e.clientY };
-  });
-  boardEl.addEventListener('pointerup', (e) => {
-    if (!dragStart) return;
-    const dx = e.clientX - dragStart.x;
-    const dy = e.clientY - dragStart.y;
-    dragStart = null;
-    const absX = Math.abs(dx), absY = Math.abs(dy);
-    if (Math.max(absX, absY) < 24) return;
-    if (absX > absY) {
-      move(dx > 0 ? 'right' : 'left');
-    } else {
-      move(dy > 0 ? 'down' : 'up');
-    }
+  const UNIT_FOR_DIR = {
+    left: { x: -1, y: 0 }, right: { x: 1, y: 0 },
+    up: { x: 0, y: -1 }, down: { x: 0, y: 1 },
+  };
+  attachDragControls({
+    boardEl,
+    isBlocked: () => !overlayEl.classList.contains('hidden'),
+    pickDirection: (dx, dy) => (Math.abs(dx) > Math.abs(dy) ? (dx > 0 ? 'right' : 'left') : (dy > 0 ? 'down' : 'up')),
+    pitchForDir: () => CELL + GAP,
+    unitForDir: (dir) => UNIT_FOR_DIR[dir],
+    computeMoveResult,
+    getTilePos: () => tilePos,
+    getElById: () => elById,
+    cellPos,
+    commit: move,
   });
 
   document.getElementById('restart-btn').addEventListener('click', startGame);
