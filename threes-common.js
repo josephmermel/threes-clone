@@ -472,6 +472,24 @@
     boardEl.addEventListener('pointercancel', finish);
   }
 
+  // Wires a button to toggle fullscreen on the whole page, swapping its glyph
+  // to reflect the current state. Silently no-ops if the browser refuses
+  // (e.g. requires a user gesture, which a click already is, but just in case).
+  function attachFullscreenToggle(btn) {
+    if (!btn) return;
+    btn.addEventListener('click', () => {
+      if (!document.fullscreenElement) {
+        document.documentElement.requestFullscreen().catch(() => {});
+      } else {
+        document.exitFullscreen().catch(() => {});
+      }
+    });
+    document.addEventListener('fullscreenchange', () => {
+      btn.textContent = document.fullscreenElement ? '⤢' : '⛶';
+      btn.title = document.fullscreenElement ? 'Exit fullscreen' : 'Fullscreen';
+    });
+  }
+
   global.ThreesCommon = {
     WILD, shuffledBag, pickRandom, cellKey, parseKey,
     canMerge, partnerValue, mergeValue, collapseLineWithIds,
@@ -479,6 +497,6 @@
     currentMaxValue, randomBonusValue,
     RAINBOW_HUES, hueForValue, tileColor, paintNumeral, paintTile,
     miniFontSize, makePreviewTile, renderNextIndicator, updatePageBackground,
-    animateMove, attachDragControls,
+    animateMove, attachDragControls, attachFullscreenToggle,
   };
 })(window);

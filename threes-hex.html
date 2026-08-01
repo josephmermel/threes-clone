@@ -4,6 +4,8 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Threes! Hex</title>
+<link rel="icon" type="image/svg+xml" href="icon-hex.svg">
+<link rel="apple-touch-icon" href="icon-hex.svg">
 <link rel="stylesheet" href="threes-common.css">
 <style>
   :root {
@@ -18,9 +20,10 @@
     border: 1px solid rgba(0,0,0,0.16);
     box-shadow: 0 6px 20px rgba(0,0,0,0.22);
   }
-  /* Pointy-top hexagon: vertex at top/bottom, flat sides at left/right. */
+  /* Pointy-top hexagon with subtly rounded corners (see the #hexRoundClip
+     clipPath in the body — objectBoundingBox units so it scales with the box). */
   .hex-shape {
-    clip-path: polygon(50% 0%, 100% 25%, 100% 75%, 50% 100%, 0% 75%, 0% 25%);
+    clip-path: url(#hexRoundClip);
   }
   .cell-bg {
     position: absolute;
@@ -39,7 +42,7 @@
     font-size: 24px;
     border: none;
     box-shadow: none;
-    filter: drop-shadow(0 3px 4px rgba(0,0,0,0.28)) drop-shadow(0 0 1px rgba(0,0,0,0.4));
+    filter: drop-shadow(0 4px 5px rgba(0,0,0,0.4)) drop-shadow(0 0 1.5px rgba(0,0,0,0.45));
   }
   .tile.wild {
     border: none;
@@ -81,14 +84,27 @@
 </style>
 </head>
 <body>
+  <svg width="0" height="0" style="position:absolute">
+    <defs>
+      <clipPath id="hexRoundClip" clipPathUnits="objectBoundingBox">
+        <path d="M0.43,0.035 Q0.5,0 0.57,0.035 L0.93,0.215 Q1,0.25 1,0.32 L1,0.68 Q1,0.75 0.93,0.785 L0.57,0.965 Q0.5,1 0.43,0.965 L0.07,0.785 Q0,0.75 0,0.68 L0,0.32 Q0,0.25 0.07,0.215 Z"/>
+      </clipPath>
+    </defs>
+  </svg>
   <div id="app">
     <div id="header">
-      <h1>Threes! Hex</h1>
+      <div id="brand">
+        <img src="icon-hex.svg" width="40" height="40" alt="">
+        <span>Threes! Hex</span>
+      </div>
       <div id="next-tile-box">
         Next
         <div id="next-indicator"></div>
       </div>
-      <button class="game-btn" id="restart-btn">Restart</button>
+      <div id="header-actions">
+        <button class="icon-btn" id="fullscreen-btn" title="Fullscreen" aria-label="Toggle fullscreen">⛶</button>
+        <button class="game-btn" id="restart-btn">Restart</button>
+      </div>
     </div>
     <div id="board-wrap">
       <div id="board"></div>
@@ -120,7 +136,7 @@
     currentMaxValue, randomBonusValue,
     resolveMove, isGameOver: commonIsGameOver,
     paintTile, renderNextIndicator, updatePageBackground, animateMove,
-    attachDragControls,
+    attachDragControls, attachFullscreenToggle,
   } = ThreesCommon;
 
   const RADIUS = 2;
@@ -507,6 +523,7 @@
 
   document.getElementById('restart-btn').addEventListener('click', startGame);
   document.getElementById('overlay-restart').addEventListener('click', startGame);
+  attachFullscreenToggle(document.getElementById('fullscreen-btn'));
 
   startGame();
 })();

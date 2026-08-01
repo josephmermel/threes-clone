@@ -1,0 +1,7 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
+  <polygon points="32,4 56.25,18 56.25,46 32,60 7.75,46 7.75,18"
+           fill="#da3e3e" stroke="#da3e3e" stroke-width="7" stroke-linejoin="round"/>
+  <text x="32" y="35" text-anchor="middle" dominant-baseline="middle"
+        font-family="-apple-system, 'Helvetica Neue', Arial, sans-serif"
+        font-weight="800" font-size="24" fill="#ffffff">3!</text>
+</svg>

@@ -4,6 +4,8 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Threes! Clone</title>
+<link rel="icon" type="image/svg+xml" href="icon-square.svg">
+<link rel="apple-touch-icon" href="icon-square.svg">
 <link rel="stylesheet" href="threes-common.css">
 <style>
   :root {
@@ -39,12 +41,18 @@
 <body>
   <div id="app">
     <div id="header">
-      <h1>Threes!</h1>
+      <div id="brand">
+        <img src="icon-square.svg" width="40" height="40" alt="">
+        <span>Threes!</span>
+      </div>
       <div id="next-tile-box">
         Next
         <div id="next-indicator"></div>
       </div>
-      <button class="game-btn" id="restart-btn">Restart</button>
+      <div id="header-actions">
+        <button class="icon-btn" id="fullscreen-btn" title="Fullscreen" aria-label="Toggle fullscreen">⛶</button>
+        <button class="game-btn" id="restart-btn">Restart</button>
+      </div>
     </div>
     <div id="board-wrap">
       <div id="board"></div>
@@ -65,7 +73,7 @@
     currentMaxValue, randomBonusValue,
     resolveMove, isGameOver: commonIsGameOver,
     paintTile, renderNextIndicator, updatePageBackground, animateMove,
-    attachDragControls,
+    attachDragControls, attachFullscreenToggle,
   } = ThreesCommon;
 
   const SIZE = 4;
@@ -365,6 +373,7 @@
 
   document.getElementById('restart-btn').addEventListener('click', startGame);
   document.getElementById('overlay-restart').addEventListener('click', startGame);
+  attachFullscreenToggle(document.getElementById('fullscreen-btn'));
 
   startGame();
 })();

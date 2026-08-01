@@ -26,19 +26,58 @@ body {
   align-items: center;
   gap: 16px;
   padding: 20px;
+  max-width: 100vw;
 }
 #header {
   display: flex;
+  flex-wrap: nowrap;
   align-items: center;
-  gap: 24px;
+  gap: 16px;
   width: 100%;
   justify-content: space-between;
 }
-h1 {
-  margin: 0;
-  font-size: 32px;
-  letter-spacing: 1px;
+#brand {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-shrink: 0;
+  min-width: 0;
 }
+#brand img {
+  width: 40px;
+  height: 40px;
+  flex-shrink: 0;
+  display: block;
+}
+#brand span {
+  font-size: 20px;
+  font-weight: 800;
+  letter-spacing: 0.5px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+#header-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-shrink: 0;
+}
+button.icon-btn {
+  background: #f4a340;
+  border: none;
+  color: #2f4858;
+  width: 40px;
+  height: 40px;
+  border-radius: 8px;
+  cursor: pointer;
+  font-size: 18px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+}
+button.icon-btn:active { transform: scale(0.94); }
 #next-tile-box {
   display: flex;
   align-items: center;
@@ -65,6 +104,25 @@ h1 {
   width: 32px;
   height: 32px;
   border-radius: 6px;
+}
+
+/* On narrow (mostly mobile) screens the header's own content — icon, title,
+   next-indicator, buttons — can add up to more than the (already-scaled-down)
+   board's width. Rather than let that push the page wider than the viewport,
+   shrink the header's least essential parts: drop the title text (the icon
+   alone still reads as the brand) and trim the rest a bit. */
+@media (max-width: 480px) {
+  #header { gap: 8px; }
+  #brand { gap: 6px; }
+  #brand img { width: 32px; height: 32px; }
+  #brand span { display: none; }
+  #next-tile-box { font-size: 11px; gap: 4px; }
+  #next-indicator { gap: 4px; }
+  .tile.preview { width: 38px; height: 38px; font-size: 15px; }
+  .tile.preview.mini { width: 26px; height: 26px; }
+  #header-actions { gap: 6px; }
+  button.icon-btn { width: 32px; height: 32px; font-size: 15px; }
+  button.game-btn { padding: 8px 12px; font-size: 13px; }
 }
 button.game-btn {
   background: #f4a340;
