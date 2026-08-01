@@ -230,19 +230,25 @@
   }
 
   // Animates one move's result: losers slide into their winner's cell and fade/flip away,
-  // survivors (incl. merge winners) glide to their new cell and pop/flip, and the freshly
-  // spawned tile fades in. Generic over board shape via the cellPos/createTileEl callbacks.
+  // survivors (incl. merge winners) glide to their new cell and pop/flip, and — only once
+  // all of that has settled — the freshly spawned tile slides in from just beyond the
+  // board edge, traveling in the same direction as the swipe (so it never competes for
+  // attention with the slide/merge, and it's obvious which edge it came from, matching
+  // the original game). Generic over board shape via the cellPos/createTileEl callbacks.
   //   elById: Map<id, DOM el>            tileValue: id -> value
   //   tilePos: id -> [a, b]              allMerges/loserFinalPos/spawnedId: from resolveMove + move()
   //   boardEl: container to append the spawned tile into
   //   cellPos(a, b): -> {left, top} in px
   //   createTileEl(value, a, b, spawning): -> new DOM el, already positioned
+  //   spawnEnterFrom: optional {left, top} in px — where the spawned tile starts (just
+  //     off the board edge) before sliding into its resting cell; omit for a plain
+  //     appear-in-place (e.g. a board shape that hasn't computed one)
   //   milestoneIds: optional Set<id> of merge winners that just set a new game-high
   //     tile — these get a bigger pop plus a radial glow burst instead of the plain pop
   function animateMove(ctx) {
     const {
       elById, tileValue, tilePos, allMerges, loserFinalPos, spawnedId,
-      boardEl, cellPos, createTileEl, milestoneIds,
+      boardEl, cellPos, createTileEl, milestoneIds, spawnEnterFrom,
       slideMs = 130, winnerFlipMs = 260, loserFlipMs = slideMs + 20,
     } = ctx;
     const winnerMeta = new Map(allMerges.map(m => [m.winnerId, m]));
@@ -304,12 +310,28 @@
       }
     }
 
-    // New tile fades in at its resting cell.
+    // Only after the slide (and any merge fallout) has fully played does the new
+    // tile appear, sliding in from just beyond the edge in the swipe's direction.
     if (spawnedId != null) {
-      const [a, b] = tilePos[spawnedId];
-      const el = createTileEl(tileValue[spawnedId], a, b, true);
-      boardEl.appendChild(el);
-      elById.set(spawnedId, el);
+      const spawnDelay = allMerges.length > 0 ? slideMs + winnerFlipMs : slideMs;
+      setTimeout(() => {
+        const [a, b] = tilePos[spawnedId];
+        const el = createTileEl(tileValue[spawnedId], a, b, false);
+        if (spawnEnterFrom) {
+          const finalLeft = el.style.left, finalTop = el.style.top;
+          el.style.transition = 'none';
+          el.style.left = spawnEnterFrom.left + 'px';
+          el.style.top = spawnEnterFrom.top + 'px';
+          boardEl.appendChild(el);
+          void el.offsetWidth; // force layout so the jump above isn't itself animated
+          el.style.transition = '';
+          el.style.left = finalLeft;
+          el.style.top = finalTop;
+        } else {
+          boardEl.appendChild(el);
+        }
+        elById.set(spawnedId, el);
+      }, spawnDelay);
     }
   }
 

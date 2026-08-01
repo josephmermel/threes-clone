@@ -281,6 +281,7 @@
     const farEdgeKeys = LINES[dir].map(line => line[line.length - 1]).filter(k => !grid.get(k));
     const spawnCells = farEdgeKeys.length > 0 ? farEdgeKeys : emptyKeys();
     let spawnedId = null;
+    let spawnEnterFrom = null;
     if (spawnCells.length > 0) {
       const key = pickRandom(spawnCells);
       const [r, c] = parseKey(key);
@@ -290,6 +291,13 @@
       tilePos[id] = [r, c];
       spawnedId = id;
       nextValue = drawNextValue();
+
+      // Enters from just beyond the board edge, traveling in the swipe's own
+      // direction into its resting cell (one pitch step "behind" where it lands).
+      const unit = UNIT_FOR_DIR[dir];
+      const finalPos = cellPos(r, c);
+      const pitch = CELL + GAP;
+      spawnEnterFrom = { left: finalPos.left - unit.x * pitch, top: finalPos.top - unit.y * pitch };
     }
 
     // A merge that just set a new game-high tile gets a bigger celebratory pop.
@@ -302,7 +310,7 @@
 
     animateMove({
       elById, tileValue, tilePos, allMerges: result.allMerges, loserFinalPos: result.loserFinalPos, spawnedId,
-      boardEl, cellPos, createTileEl: makeTileEl, milestoneIds,
+      boardEl, cellPos, createTileEl: makeTileEl, milestoneIds, spawnEnterFrom,
       slideMs: SLIDE_MS, winnerFlipMs: WINNER_FLIP_MS, loserFlipMs: LOSER_FLIP_MS,
     });
     renderNextIndicator(nextIndicatorEl, nextValue, TRIPLE_HINT_CHANCE);
