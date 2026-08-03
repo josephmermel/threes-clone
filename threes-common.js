@@ -3,6 +3,17 @@
 // Board-shape-specific code (grid layout, line/neighbor geometry, pixel positioning,
 // input handling) lives in each game's own HTML file.
 (function (global) {
+  // The viewport meta tag (maximum-scale=1, user-scalable=no) is the main defense
+  // against iOS Safari zooming during fast touch play, but it isn't always fully
+  // honored. Belt and suspenders: block the multi-touch gesture directly, and
+  // (Safari-only) the non-standard gesture* events that actually drive pinch-zoom.
+  document.addEventListener('touchmove', (e) => {
+    if (e.touches.length > 1) e.preventDefault();
+  }, { passive: false });
+  ['gesturestart', 'gesturechange', 'gestureend'].forEach((type) => {
+    document.addEventListener(type, (e) => e.preventDefault());
+  });
+
   const WILD = 'W';
 
   function shuffledBag() {
