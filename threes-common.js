@@ -140,27 +140,30 @@
     return pickRandom(chain);
   }
 
-  // Hand-picked "candy" colors for 3, 6, 12, 24, ... (rank = log2(v/3)), rather than
-  // a computed hue ramp: roughly rainbow-ordered but with a couple of bright variants
-  // per hue plus a brown, chosen so every neighbor reads as a genuinely different
-  // color rather than a shade of the last one. fg is picked per-swatch by hand
-  // (checked against perceived luminance) instead of a hue-range rule.
+  // Hand-picked "candy" colors for 3, 6, 12, 24, ... (rank = log2(v/3)). Rather than
+  // rainbow order (which put 3-4 shades of orange/yellow back to back and made
+  // consecutive tiles hard to tell apart), this rotates through 8 distinct hue
+  // families - red, green, blue, orange, purple, teal, pink, brown - so every
+  // tile is a clear jump from its neighbor, then repeats the rotation with a
+  // second variant per family. That also surfaces green/blue/purple/brown much
+  // earlier instead of saving them for the high end. fg is picked per-swatch by
+  // hand (checked against perceived luminance) instead of a hue-range rule.
   const CANDY_PALETTE = [
     { bg: '#ff3b30', fg: '#fff8ec' }, // Cherry Red      3
-    { bg: '#ff6961', fg: '#fff8ec' }, // Coral           6
-    { bg: '#ff9500', fg: '#2b2410' }, // Tangerine       12
-    { bg: '#ffc145', fg: '#2b2410' }, // Marigold        24
-    { bg: '#ffe156', fg: '#2b2410' }, // Lemon           48
-    { bg: '#c6e21e', fg: '#2b2410' }, // Lime            96
-    { bg: '#34c759', fg: '#fff8ec' }, // Kelly Green     192
-    { bg: '#06d6a0', fg: '#fff8ec' }, // Spearmint       384
-    { bg: '#4cc9f0', fg: '#2b2410' }, // Sky Cyan        768
-    { bg: '#3a86ff', fg: '#fff8ec' }, // Blueberry       1536
-    { bg: '#5856d6', fg: '#fff8ec' }, // Indigo          3072
-    { bg: '#9b5de5', fg: '#fff8ec' }, // Grape           6144
+    { bg: '#34c759', fg: '#fff8ec' }, // Kelly Green     6
+    { bg: '#3a86ff', fg: '#fff8ec' }, // Blueberry       12
+    { bg: '#ff9500', fg: '#2b2410' }, // Tangerine       24
+    { bg: '#9b5de5', fg: '#fff8ec' }, // Grape           48
+    { bg: '#06d6a0', fg: '#fff8ec' }, // Spearmint       96
+    { bg: '#f15bb5', fg: '#fff8ec' }, // Bubblegum       192
+    { bg: '#a0673d', fg: '#fff8ec' }, // Caramel Brown   384
+    { bg: '#ff6961', fg: '#fff8ec' }, // Coral           768
+    { bg: '#c6e21e', fg: '#2b2410' }, // Lime            1536
+    { bg: '#4cc9f0', fg: '#2b2410' }, // Sky Cyan        3072
+    { bg: '#ffc145', fg: '#2b2410' }, // Marigold        6144
     { bg: '#c77dff', fg: '#2b2410' }, // Lavender        12288
-    { bg: '#f15bb5', fg: '#fff8ec' }, // Bubblegum       24576
-    { bg: '#a0673d', fg: '#fff8ec' }, // Caramel Brown   49152
+    { bg: '#2ec4b6', fg: '#fff8ec' }, // Turquoise       24576
+    { bg: '#ff2d78', fg: '#fff8ec' }, // Watermelon      49152
     { bg: '#6b2545', fg: '#fff8ec' }, // Plum            98304+
   ];
 
