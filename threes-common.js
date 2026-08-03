@@ -140,24 +140,35 @@
     return pickRandom(chain);
   }
 
-  // Hues for 3, 6, 12, 24, ..., 12288 (rank = log2(v/3)). Spaced unevenly on purpose:
-  // much wider gaps through the yellow/green band (where hue differences are hardest
-  // to tell apart) so consecutive tiles read as distinct colors, not shades of one color.
-  const RAINBOW_HUES = [0, 25, 60, 105, 150, 175, 195, 210, 225, 240, 252, 262, 270];
-
-  function hueForValue(v) {
-    const rank = Math.min(Math.round(Math.log2(v / 3)), RAINBOW_HUES.length - 1);
-    return RAINBOW_HUES[rank];
-  }
+  // Hand-picked "candy" colors for 3, 6, 12, 24, ... (rank = log2(v/3)), rather than
+  // a computed hue ramp: roughly rainbow-ordered but with a couple of bright variants
+  // per hue plus a brown, chosen so every neighbor reads as a genuinely different
+  // color rather than a shade of the last one. fg is picked per-swatch by hand
+  // (checked against perceived luminance) instead of a hue-range rule.
+  const CANDY_PALETTE = [
+    { bg: '#ff3b30', fg: '#fff8ec' }, // Cherry Red      3
+    { bg: '#ff6961', fg: '#fff8ec' }, // Coral           6
+    { bg: '#ff9500', fg: '#2b2410' }, // Tangerine       12
+    { bg: '#ffc145', fg: '#2b2410' }, // Marigold        24
+    { bg: '#ffe156', fg: '#2b2410' }, // Lemon           48
+    { bg: '#c6e21e', fg: '#2b2410' }, // Lime            96
+    { bg: '#34c759', fg: '#fff8ec' }, // Kelly Green     192
+    { bg: '#06d6a0', fg: '#fff8ec' }, // Spearmint       384
+    { bg: '#4cc9f0', fg: '#2b2410' }, // Sky Cyan        768
+    { bg: '#3a86ff', fg: '#fff8ec' }, // Blueberry       1536
+    { bg: '#5856d6', fg: '#fff8ec' }, // Indigo          3072
+    { bg: '#9b5de5', fg: '#fff8ec' }, // Grape           6144
+    { bg: '#c77dff', fg: '#2b2410' }, // Lavender        12288
+    { bg: '#f15bb5', fg: '#fff8ec' }, // Bubblegum       24576
+    { bg: '#a0673d', fg: '#fff8ec' }, // Caramel Brown   49152
+    { bg: '#6b2545', fg: '#fff8ec' }, // Plum            98304+
+  ];
 
   function tileColor(v) {
     if (v === 1) return { bg: '#ffffff', fg: '#3a3a3a' };
     if (v === 2) return { bg: '#232323', fg: '#f2f2f2' };
-    const hue = hueForValue(v);
-    const bg = `hsl(${hue}, 68%, 55%)`;
-    // The gold/chartreuse band reads as light even at a fixed lightness, so flip to dark text there.
-    const fg = (hue >= 40 && hue <= 120) ? '#2b2410' : '#fff8ec';
-    return { bg, fg };
+    const rank = Math.min(Math.round(Math.log2(v / 3)), CANDY_PALETTE.length - 1);
+    return CANDY_PALETTE[rank];
   }
 
   // Paints a normal numbered face, even mid-flip on a tile whose real value is still WILD.
@@ -506,7 +517,7 @@
     canMerge, partnerValue, mergeValue, collapseLineWithIds,
     resolveMove, isGameOver, triplesContaining,
     currentMaxValue, randomBonusValue,
-    RAINBOW_HUES, hueForValue, tileColor, paintNumeral, paintTile,
+    CANDY_PALETTE, tileColor, paintNumeral, paintTile,
     miniFontSize, makePreviewTile, renderNextIndicator, updatePageBackground,
     animateMove, attachDragControls, attachFullscreenToggle,
   };
