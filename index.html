@@ -134,6 +134,7 @@
   let idCounter;
   let nextValue;
   let recordMax;  // highest tile value seen so far this game, for milestone celebrations
+  let highestMatchValue; // highest value produced by an actual merge so far (0 = none yet); drives the page background
   let deck = [];
 
   function drawValue() {
@@ -254,10 +255,11 @@
       elById.set(id, el);
     }
     recordMax = currentMaxValue(tileValue); // don't celebrate reaching a value the starters already had
+    highestMatchValue = 0; // background starts white regardless of starter tile values
 
     nextValue = drawNextValue();
     renderNextIndicator(nextIndicatorEl, nextValue, TRIPLE_HINT_CHANCE);
-    updatePageBackground(tileValue);
+    updatePageBackground(highestMatchValue);
     overlayEl.classList.add('hidden');
   }
 
@@ -282,6 +284,7 @@
     for (const { winnerId, loserId, newValue } of result.allMerges) {
       tileValue[winnerId] = newValue;
       delete tileValue[loserId];
+      if (newValue > highestMatchValue) highestMatchValue = newValue;
     }
     grid = new Map(result.newEntries.filter(([, id]) => id != null));
     tilePos = result.newTilePos;
@@ -322,7 +325,7 @@
       slideMs: SLIDE_MS, winnerFlipMs: WINNER_FLIP_MS, loserFlipMs: LOSER_FLIP_MS,
     });
     renderNextIndicator(nextIndicatorEl, nextValue, TRIPLE_HINT_CHANCE);
-    updatePageBackground(tileValue);
+    updatePageBackground(highestMatchValue);
 
     if (commonIsGameOver(grid, tileValue, ALL_KEYS, NEIGHBOR_PAIRS)) {
       overlayTextEl.textContent = 'Game Over';

@@ -3,7 +3,7 @@
    game's own <style> block, loaded after this file. */
 
 :root {
-  --page-bg: #23262b;
+  --page-bg: #ffffff;
 }
 * { box-sizing: border-box; }
 body {

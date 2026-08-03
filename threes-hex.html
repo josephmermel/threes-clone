@@ -133,7 +133,7 @@
 (function () {
   const {
     WILD, shuffledBag, pickRandom, cellKey, parseKey,
-    currentMaxValue, randomBonusValue,
+    currentMaxValue,
     resolveMove, isGameOver: commonIsGameOver,
     paintTile, renderNextIndicator, updatePageBackground, animateMove,
     attachDragControls, attachFullscreenToggle,
@@ -153,7 +153,9 @@
   const WILDCARD_CHANCE = 0.05;
   const TRIPLE_HINT_CHANCE = 0.6;
   const BONUS_MIN_MAX = 6;
-  const BONUS_CHANCE = 0.12;
+  const BONUS_CHANCE = 0.12;    // bonus-tile chance right when it first becomes eligible
+  const BONUS_CHANCE_STEP = 0.05; // added per doubling of the board's record tile
+  const BONUS_CHANCE_CAP = 0.5;   // ...up to this much of the time
   const STARTER_SIX_CHANCE = 0.15; // chance a starting tile is a 6 instead of a plain 1/2/3 draw
 
   const boardEl = document.getElementById('board');
@@ -276,6 +278,7 @@
   let idCounter;
   let nextValue;
   let recordMax;  // highest tile value seen so far this game, for milestone celebrations
+  let highestMatchValue; // highest value produced by an actual merge so far (0 = none yet); drives the page background
   let deck = [];
 
   function drawValue() {
@@ -287,11 +290,35 @@
     return Math.random() < STARTER_SIX_CHANCE ? 6 : drawValue();
   }
 
+  // Every hex tile can have up to 6 neighbors, so matches come easy and the board
+  // rarely fills up on a steady diet of 1/2/3s that merge away as fast as they land.
+  // Two adjustments counteract that as the game goes on: bonus (>3) tiles get more
+  // frequent per doubling of the record tile, and the bonus value itself is biased
+  // toward the top of the chain instead of picked uniformly - so late-game draws
+  // skew toward genuinely large, harder-to-match tiles rather than mostly still 6s.
+  function bonusChanceFor(maxVal) {
+    const doublings = Math.max(0, Math.round(Math.log2(maxVal / BONUS_MIN_MAX)));
+    return Math.min(BONUS_CHANCE_CAP, BONUS_CHANCE + doublings * BONUS_CHANCE_STEP);
+  }
+
+  function weightedBonusValue(maxVal) {
+    const cap = Math.max(6, maxVal);
+    const chain = [];
+    for (let v = 6; v <= cap; v *= 2) chain.push(v);
+    const totalWeight = (chain.length * (chain.length + 1)) / 2;
+    let r = Math.random() * totalWeight;
+    for (let i = 0; i < chain.length; i++) {
+      r -= (i + 1);
+      if (r < 0) return chain[i];
+    }
+    return chain[chain.length - 1];
+  }
+
   function drawNextValue() {
     if (Math.random() < WILDCARD_CHANCE) return WILD;
     const maxVal = currentMaxValue(tileValue);
-    if (maxVal >= BONUS_MIN_MAX && Math.random() < BONUS_CHANCE) {
-      return randomBonusValue(maxVal);
+    if (maxVal >= BONUS_MIN_MAX && Math.random() < bonusChanceFor(maxVal)) {
+      return weightedBonusValue(maxVal);
     }
     return drawValue();
   }
@@ -386,10 +413,11 @@
       elById.set(id, el);
     }
     recordMax = currentMaxValue(tileValue); // don't celebrate reaching a value the starters already had
+    highestMatchValue = 0; // background starts white regardless of starter tile values
 
     nextValue = drawNextValue();
     renderNextIndicator(nextIndicatorEl, nextValue, TRIPLE_HINT_CHANCE);
-    updatePageBackground(tileValue);
+    updatePageBackground(highestMatchValue);
     overlayEl.classList.add('hidden');
   }
 
@@ -415,6 +443,7 @@
     for (const { winnerId, loserId, newValue } of result.allMerges) {
       tileValue[winnerId] = newValue;
       delete tileValue[loserId];
+      if (newValue > highestMatchValue) highestMatchValue = newValue;
     }
     grid = new Map(result.newEntries.filter(([, id]) => id != null));
     tilePos = result.newTilePos;
@@ -455,7 +484,7 @@
       slideMs: SLIDE_MS, winnerFlipMs: WINNER_FLIP_MS, loserFlipMs: LOSER_FLIP_MS,
     });
     renderNextIndicator(nextIndicatorEl, nextValue, TRIPLE_HINT_CHANCE);
-    updatePageBackground(tileValue);
+    updatePageBackground(highestMatchValue);
 
     if (commonIsGameOver(grid, tileValue, ALL_KEYS, NEIGHBOR_PAIRS)) {
       overlayTextEl.textContent = 'Game Over';

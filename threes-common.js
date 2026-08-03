@@ -228,16 +228,19 @@
     }
   }
 
-  // The page background follows the highest tile on the board: that tile's own color
-  // laid over white at 50% opacity, so it stays a clear, colorful hue rather than a
-  // dark muddy one, and shifts every time a new high tile appears.
-  function updatePageBackground(tileValue) {
-    let maxVal = 1;
-    for (const id in tileValue) {
-      const v = tileValue[id];
-      if (v !== WILD && v > maxVal) maxVal = v;
+  // The page starts plain white and only picks up color once the player has made
+  // an actual match - starting tiles (even a lucky starting 6) don't count, only
+  // merges do. From then on it follows the highest value produced by a merge so
+  // far: that tile's own color laid over white at 50% opacity, so it stays a
+  // clear, colorful hue rather than a dark muddy one, and shifts every time a
+  // new high match is made. Pass the highest merged value so far, or a falsy
+  // value (0/undefined) before the first match.
+  function updatePageBackground(highestMatchValue) {
+    if (!highestMatchValue) {
+      document.documentElement.style.setProperty('--page-bg', '#ffffff');
+      return;
     }
-    const { bg: tileBg } = tileColor(maxVal);
+    const { bg: tileBg } = tileColor(highestMatchValue);
     document.documentElement.style.setProperty('--page-bg', `color-mix(in srgb, ${tileBg} 50%, white)`);
   }
 
