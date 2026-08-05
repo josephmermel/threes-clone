@@ -54,13 +54,22 @@ body {
 }
 /* Its own row between the header and the board, rather than crammed into the
    header bar - a little scoreboard moment, so it gets a bigger, bolder,
-   more playful treatment than any of the header's small utility text. */
+   more playful treatment than any of the header's small utility text. Sits on
+   a fixed card background (the same --board-bg each game already uses for its
+   board) rather than directly on the page, since the page background shifts
+   through the whole candy palette as the game progresses and an amber number
+   would wash out or clash against some of those hues otherwise. */
 #score-row {
   display: flex;
   flex-direction: column;
   align-items: center;
   gap: 2px;
   margin: 20px 0 4px;
+  padding: 8px 28px 10px;
+  background: var(--board-bg);
+  border: 1px solid rgba(0,0,0,0.16);
+  border-radius: 14px;
+  box-shadow: 0 4px 10px rgba(0,0,0,0.15);
 }
 #score-label {
   font-size: 13px;
@@ -74,7 +83,7 @@ body {
   font-weight: 800;
   letter-spacing: 1px;
   font-variant-numeric: tabular-nums;
-  color: #f4a340;
+  color: #c9700f;
   text-shadow: 0 3px 0 rgba(0,0,0,0.1);
   line-height: 1;
   transition: transform 0.2s ease;
@@ -165,7 +174,7 @@ button.icon-btn:active { transform: scale(0.94); }
   #brand { gap: 6px; }
   #brand img { width: 32px; height: 32px; }
   #brand span { display: none; }
-  #score-row { margin: 12px 0 2px; }
+  #score-row { margin: 12px 0 2px; padding: 6px 20px 8px; }
   #score-label { font-size: 11px; letter-spacing: 2px; }
   #score-value { font-size: 34px; }
   #next-tile-box { font-size: 11px; gap: 4px; }
