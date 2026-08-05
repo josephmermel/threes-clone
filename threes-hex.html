@@ -178,14 +178,19 @@
     return Math.min(SPAWN_CAP, matchValue / 4);
   }
 
+  // {1,2} is modeled as a single weighted slot (LOW_SLOT), split 50/50 only after
+  // it's chosen - so "1 and 2 are equally likely" is a structural guarantee, not
+  // just two entries that happen to share the same constant.
+  const LOW_SLOT = Symbol('low');
+
   function pickSpawnValueForCap(cap) {
-    const entries = [{ v: 1, w: LOW_VALUE_BOOST }, { v: 2, w: LOW_VALUE_BOOST }];
+    const entries = [{ v: LOW_SLOT, w: LOW_VALUE_BOOST * 2 }];
     for (let v = 3, i = 0; v <= cap; v *= 2, i++) entries.push({ v, w: Math.pow(CHAIN_DECAY, i + 1) });
     const total = entries.reduce((sum, e) => sum + e.w, 0);
     let r = Math.random() * total;
     for (const e of entries) {
       r -= e.w;
-      if (r < 0) return e.v;
+      if (r < 0) return e.v === LOW_SLOT ? (Math.random() < 0.5 ? 1 : 2) : e.v;
     }
     return entries[entries.length - 1].v;
   }
