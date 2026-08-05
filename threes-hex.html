@@ -168,14 +168,17 @@
   const SPAWN_CAP = 96;          // hard ceiling regardless of how far the match record goes
   const LOW_VALUE_BOOST = 2.5;   // relative weight of a plain 1 or 2 draw
   const CHAIN_DECAY = 0.55;      // each step up the doubling chain is this fraction as likely
+  // Starting tiles use this fixed cap instead of the match-based one below (which would
+  // otherwise only ever allow 1s and 2s, since nothing has been matched yet) - a few 3s
+  // and 6s already on the board make for a more interesting opening than an all-1s-and-2s start.
+  const STARTER_CAP = 6;
 
   function maxSpawnValue(matchValue) {
     if (matchValue < 12) return 2;
     return Math.min(SPAWN_CAP, matchValue / 4);
   }
 
-  function pickSpawnValue(matchValue) {
-    const cap = maxSpawnValue(matchValue);
+  function pickSpawnValueForCap(cap) {
     const entries = [{ v: 1, w: LOW_VALUE_BOOST }, { v: 2, w: LOW_VALUE_BOOST }];
     for (let v = 3, i = 0; v <= cap; v *= 2, i++) entries.push({ v, w: Math.pow(CHAIN_DECAY, i + 1) });
     const total = entries.reduce((sum, e) => sum + e.w, 0);
@@ -185,6 +188,10 @@
       if (r < 0) return e.v;
     }
     return entries[entries.length - 1].v;
+  }
+
+  function pickSpawnValue(matchValue) {
+    return pickSpawnValueForCap(maxSpawnValue(matchValue));
   }
 
   const boardEl = document.getElementById('board');
@@ -310,7 +317,7 @@
   let highestMatchValue; // highest value produced by an actual merge so far (0 = none yet); drives the page background and the spawn cap
 
   function drawStarterValue() {
-    return pickSpawnValue(0);
+    return pickSpawnValueForCap(STARTER_CAP);
   }
 
   function drawNextValue() {
