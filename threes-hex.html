@@ -93,31 +93,36 @@
         <img src="icon-hex.svg" width="40" height="40" alt="">
         <span>Threes! Hex</span>
       </div>
-      <div id="next-tile-box">
-        Next
-        <div id="next-indicator"></div>
+      <div id="stats">
+        <div id="score-box">Score <span id="score-value">0</span></div>
+        <div id="next-tile-box">
+          Next
+          <div id="next-indicator"></div>
+        </div>
       </div>
       <div id="header-actions">
         <button class="icon-btn" id="fullscreen-btn" title="Fullscreen" aria-label="Toggle fullscreen">⛶</button>
         <button class="game-btn" id="restart-btn">Restart</button>
       </div>
     </div>
-    <div id="board-wrap">
-      <div id="board"></div>
-      <div id="edge-bars">
-        <button class="edge-bar" data-dir="NW" aria-label="Slide NW"></button>
-        <button class="edge-bar" data-dir="NE" aria-label="Slide NE"></button>
-        <button class="edge-bar" data-dir="E" aria-label="Slide E"></button>
-        <button class="edge-bar" data-dir="SE" aria-label="Slide SE"></button>
-        <button class="edge-bar" data-dir="SW" aria-label="Slide SW"></button>
-        <button class="edge-bar" data-dir="W" aria-label="Slide W"></button>
+    <div id="main">
+      <div id="board-wrap">
+        <div id="board"></div>
+        <div id="edge-bars">
+          <button class="edge-bar" data-dir="NW" aria-label="Slide NW"></button>
+          <button class="edge-bar" data-dir="NE" aria-label="Slide NE"></button>
+          <button class="edge-bar" data-dir="E" aria-label="Slide E"></button>
+          <button class="edge-bar" data-dir="SE" aria-label="Slide SE"></button>
+          <button class="edge-bar" data-dir="SW" aria-label="Slide SW"></button>
+          <button class="edge-bar" data-dir="W" aria-label="Slide W"></button>
+        </div>
+        <div id="overlay" class="hidden">
+          <div id="overlay-text">Game Over</div>
+          <button class="game-btn" id="overlay-restart">Try Again</button>
+        </div>
       </div>
-      <div id="overlay" class="hidden">
-        <div id="overlay-text">Game Over</div>
-        <button class="game-btn" id="overlay-restart">Try Again</button>
-      </div>
+      <div id="variant-nav"><a href="index.html">&larr; Back to the classic square game</a></div>
     </div>
-    <div id="variant-nav"><a href="index.html">&larr; Back to the classic square game</a></div>
   </div>
 
 <script src="threes-common.js"></script>
@@ -125,7 +130,7 @@
 (function () {
   const {
     WILD, pickRandom, cellKey, parseKey,
-    currentMaxValue,
+    currentMaxValue, boardScore,
     resolveMove, isGameOver: commonIsGameOver,
     paintTile, paintNumeral, renderNextIndicator, updatePageBackground, animateMove,
     attachDragControls, attachFullscreenToggle,
@@ -206,6 +211,7 @@
   }
 
   const boardEl = document.getElementById('board');
+  const scoreValueEl = document.getElementById('score-value');
   const nextIndicatorEl = document.getElementById('next-indicator');
   const overlayEl = document.getElementById('overlay');
   const overlayTextEl = document.getElementById('overlay-text');
@@ -353,13 +359,19 @@
   const MAX_SCALE = 3; // generous ceiling so a huge window doesn't blow tiles up absurdly
   const appEl = document.getElementById('app');
   const headerEl = document.getElementById('header');
+  const mainEl = document.getElementById('main');
   const navEl = document.getElementById('variant-nav');
 
+  // Non-board vertical chrome: #app's own top/bottom padding, the gap between
+  // #header and #main, header's own height, the gap between the board and the
+  // footer link inside #main, and the footer link's own height.
   function computeScale() {
     const appStyle = getComputedStyle(appEl);
+    const mainStyle = getComputedStyle(mainEl);
     const vPad = parseFloat(appStyle.paddingTop) + parseFloat(appStyle.paddingBottom);
-    const gap = parseFloat(appStyle.gap) || 16;
-    const chromeHeight = headerEl.offsetHeight + navEl.offsetHeight + vPad + gap * 2;
+    const appGap = parseFloat(appStyle.gap) || 16;
+    const mainGap = parseFloat(mainStyle.gap) || 16;
+    const chromeHeight = headerEl.offsetHeight + navEl.offsetHeight + vPad + appGap + mainGap;
     const availableWidth = window.innerWidth - 44; // ~ #app's horizontal padding
     const availableHeight = window.innerHeight - chromeHeight;
     const widthScale = availableWidth / NATURAL_WIDTH;
@@ -506,6 +518,7 @@
     nextValue = drawNextValue();
     renderNextIndicator(nextIndicatorEl, nextValue, TRIPLE_HINT_CHANCE);
     updatePageBackground(highestMatchValue);
+    scoreValueEl.textContent = boardScore(tileValue).toLocaleString();
     overlayEl.classList.add('hidden');
   }
 
@@ -574,6 +587,7 @@
     });
     renderNextIndicator(nextIndicatorEl, nextValue, TRIPLE_HINT_CHANCE);
     updatePageBackground(highestMatchValue);
+    scoreValueEl.textContent = boardScore(tileValue).toLocaleString();
 
     if (commonIsGameOver(grid, tileValue, ALL_KEYS, NEIGHBOR_PAIRS)) {
       overlayTextEl.textContent = 'Game Over';

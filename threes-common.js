@@ -131,6 +131,25 @@
     return max;
   }
 
+  // Same scoring curve the original Threes! uses: 1s and 2s are worth nothing
+  // (they're not "real" tiles yet), and each step up the doubling chain from 3
+  // is worth 3x the last one - 3, 9, 27, 81, 243, ... - rather than just the
+  // tile's face value, so a few big merges are worth far more than a board
+  // full of small ones. Live score is just this summed over every current
+  // tile, not a separate running counter, so it can only reflect the board
+  // that's actually there right now.
+  function scoreForValue(v) {
+    if (v === WILD || v < 3) return 0;
+    const rank = Math.round(Math.log2(v / 3));
+    return Math.pow(3, rank + 1);
+  }
+
+  function boardScore(tileValue) {
+    let total = 0;
+    for (const id in tileValue) total += scoreForValue(tileValue[id]);
+    return total;
+  }
+
   // A random tile from the doubling chain 6,12,24,..., capped at the board's
   // largest tile so far (so a bonus spawn can rise to meet it, never pass it).
   function randomBonusValue(maxVal) {
@@ -529,7 +548,7 @@
     WILD, shuffledBag, pickRandom, cellKey, parseKey,
     canMerge, partnerValue, mergeValue, collapseLineWithIds,
     resolveMove, isGameOver, triplesContaining,
-    currentMaxValue, randomBonusValue,
+    currentMaxValue, randomBonusValue, scoreForValue, boardScore,
     CANDY_PALETTE, tileColor, paintNumeral, paintTile,
     miniFontSize, makePreviewTile, renderNextIndicator, updatePageBackground,
     animateMove, attachDragControls, attachFullscreenToggle,

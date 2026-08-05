@@ -45,24 +45,29 @@
         <img src="icon-square.svg" width="40" height="40" alt="">
         <span>Threes!</span>
       </div>
-      <div id="next-tile-box">
-        Next
-        <div id="next-indicator"></div>
+      <div id="stats">
+        <div id="score-box">Score <span id="score-value">0</span></div>
+        <div id="next-tile-box">
+          Next
+          <div id="next-indicator"></div>
+        </div>
       </div>
       <div id="header-actions">
         <button class="icon-btn" id="fullscreen-btn" title="Fullscreen" aria-label="Toggle fullscreen">⛶</button>
         <button class="game-btn" id="restart-btn">Restart</button>
       </div>
     </div>
-    <div id="board-wrap">
-      <div id="board"></div>
-      <div id="overlay" class="hidden">
-        <div id="overlay-text">Game Over</div>
-        <button class="game-btn" id="overlay-restart">Try Again</button>
+    <div id="main">
+      <div id="board-wrap">
+        <div id="board"></div>
+        <div id="overlay" class="hidden">
+          <div id="overlay-text">Game Over</div>
+          <button class="game-btn" id="overlay-restart">Try Again</button>
+        </div>
       </div>
+      <div id="hint">Arrow keys / swipe / drag to slide tiles. 1 + 2 = 3, matching tiles combine (3+3=6, 6+6=12, ...). The rare gold-and-purple ★ wildcard matches whatever it slides into. Bonus tiles sometimes show as a group of three &mdash; the real one could be any of them.</div>
+      <div id="variant-nav"><a href="threes-hex.html">Try the hex variant &rarr;</a></div>
     </div>
-    <div id="hint">Arrow keys / swipe / drag to slide tiles. 1 + 2 = 3, matching tiles combine (3+3=6, 6+6=12, ...). The rare gold-and-purple ★ wildcard matches whatever it slides into. Bonus tiles sometimes show as a group of three &mdash; the real one could be any of them.</div>
-    <div id="variant-nav"><a href="threes-hex.html">Try the hex variant &rarr;</a></div>
   </div>
 
 <script src="threes-common.js"></script>
@@ -70,7 +75,7 @@
 (function () {
   const {
     WILD, shuffledBag, pickRandom, cellKey, parseKey,
-    currentMaxValue, randomBonusValue,
+    currentMaxValue, randomBonusValue, boardScore,
     resolveMove, isGameOver: commonIsGameOver,
     paintTile, paintNumeral, renderNextIndicator, updatePageBackground, animateMove,
     attachDragControls, attachFullscreenToggle,
@@ -90,6 +95,7 @@
   const STARTER_SIX_CHANCE = 0.15; // chance a starting tile is a 6 instead of a plain 1/2/3 draw
 
   const boardEl = document.getElementById('board');
+  const scoreValueEl = document.getElementById('score-value');
   const nextIndicatorEl = document.getElementById('next-indicator');
   const overlayEl = document.getElementById('overlay');
   const overlayTextEl = document.getElementById('overlay-text');
@@ -270,6 +276,7 @@
     nextValue = drawNextValue();
     renderNextIndicator(nextIndicatorEl, nextValue, TRIPLE_HINT_CHANCE);
     updatePageBackground(highestMatchValue);
+    scoreValueEl.textContent = boardScore(tileValue).toLocaleString();
     overlayEl.classList.add('hidden');
   }
 
@@ -337,6 +344,7 @@
     });
     renderNextIndicator(nextIndicatorEl, nextValue, TRIPLE_HINT_CHANCE);
     updatePageBackground(highestMatchValue);
+    scoreValueEl.textContent = boardScore(tileValue).toLocaleString();
 
     if (commonIsGameOver(grid, tileValue, ALL_KEYS, NEIGHBOR_PAIRS)) {
       overlayTextEl.textContent = 'Game Over';
