@@ -52,35 +52,37 @@
             drop-shadow(0 0 1px rgba(255,255,255,0.6));
   }
 
-  #dirpad {
-    display: grid;
-    grid-template-columns: repeat(2, 44px);
-    grid-auto-rows: 40px;
-    gap: 6px;
-    justify-content: center;
+  /* Six slide buttons live right on the board's edge instead of a separate panel
+     below it - siblings of #board (not children), positioned by percentage so
+     they track its size exactly and stay put on resize with no JS involved.
+     Each is a small triangle (clip-path, since border/box-shadow don't render
+     evenly on a clipped shape - drop-shadow again, as with the hex tiles) that
+     points outward at its own direction. */
+  #edge-arrows {
+    position: absolute;
+    inset: 0;
+    pointer-events: none;
+    z-index: 6; /* above tiles/merge effects (z-index up to 5), below the game-over overlay (10) */
   }
-  #dirpad button {
+  .edge-arrow {
+    position: absolute;
+    width: 34px;
+    height: 30px;
+    padding: 0;
     border: none;
-    border-radius: 8px;
-    background: rgba(255,255,255,0.35);
-    color: inherit;
-    font-size: 15px;
-    font-weight: 700;
+    background: #f4a340;
+    clip-path: polygon(50% 0%, 100% 100%, 0% 100%);
+    filter: drop-shadow(0 2px 4px rgba(0,0,0,0.4));
     cursor: pointer;
+    pointer-events: auto;
   }
-  #dirpad button:active { transform: scale(0.94); }
-  #dirpad-wrap {
-    display: flex;
-    flex-direction: column;
-    align-items: center;
-    gap: 8px;
-  }
-  #dirpad-label {
-    font-size: 12px;
-    opacity: 0.7;
-    text-transform: uppercase;
-    letter-spacing: 1px;
-  }
+  .edge-arrow:active { background: #ffb75c; }
+  .edge-arrow.dir-E  { left: 100%;  top: 50%;   transform: translate(-50%, -50%) rotate(90deg); }
+  .edge-arrow.dir-SE { left: 75%;   top: 93.3%; transform: translate(-50%, -50%) rotate(150deg); }
+  .edge-arrow.dir-SW { left: 25%;   top: 93.3%; transform: translate(-50%, -50%) rotate(210deg); }
+  .edge-arrow.dir-W  { left: 0%;    top: 50%;   transform: translate(-50%, -50%) rotate(270deg); }
+  .edge-arrow.dir-NW { left: 25%;   top: 6.7%;  transform: translate(-50%, -50%) rotate(330deg); }
+  .edge-arrow.dir-NE { left: 75%;   top: 6.7%;  transform: translate(-50%, -50%) rotate(30deg); }
 </style>
 </head>
 <body>
@@ -108,23 +110,19 @@
     </div>
     <div id="board-wrap">
       <div id="board"></div>
+      <div id="edge-arrows">
+        <button class="edge-arrow dir-NW" data-dir="NW" aria-label="Slide NW"></button>
+        <button class="edge-arrow dir-NE" data-dir="NE" aria-label="Slide NE"></button>
+        <button class="edge-arrow dir-E" data-dir="E" aria-label="Slide E"></button>
+        <button class="edge-arrow dir-SE" data-dir="SE" aria-label="Slide SE"></button>
+        <button class="edge-arrow dir-SW" data-dir="SW" aria-label="Slide SW"></button>
+        <button class="edge-arrow dir-W" data-dir="W" aria-label="Slide W"></button>
+      </div>
       <div id="overlay" class="hidden">
         <div id="overlay-text">Game Over</div>
         <button class="game-btn" id="overlay-restart">Try Again</button>
       </div>
     </div>
-    <div id="dirpad-wrap">
-      <div id="dirpad-label">Slide</div>
-      <div id="dirpad">
-        <button data-dir="NW">↖ NW</button>
-        <button data-dir="NE">↗ NE</button>
-        <button data-dir="W">← W</button>
-        <button data-dir="E">E →</button>
-        <button data-dir="SW">↙ SW</button>
-        <button data-dir="SE">↘ SE</button>
-      </div>
-    </div>
-    <div id="hint">Q/W/E/A/S/D or drag to slide in 6 directions &mdash; every tile can have up to 6 neighbors here, so matches come easier but the board fills up fast. Same merge rules as the classic game.</div>
     <div id="variant-nav"><a href="index.html">&larr; Back to the classic square game</a></div>
   </div>
 
@@ -143,7 +141,11 @@
   const BASE_HEX_SIZE = 42;   // circumradius used for cell-to-cell spacing (the "pitch")
   const BASE_HEX_RENDER = 37; // circumradius actually drawn; smaller than the pitch so a
                               // gap shows on all 6 sides, matching the square grid's look
-  const BASE_BOARD_PAD = 16;
+  // Edge-to-edge gap between two adjacent rendered hexes, for a regular hex grid at this
+  // pitch/render ratio - same in all 6 directions. Board padding matches it exactly, so
+  // the gap from the outermost tile to the board's wall reads the same as the gap
+  // between tiles (the square game's board padding equals its cell gap the same way).
+  const BASE_BOARD_PAD = Math.sqrt(3) * (BASE_HEX_SIZE - BASE_HEX_RENDER);
   let SCALE = 1, HEX_SIZE = BASE_HEX_SIZE, HEX_RENDER = BASE_HEX_RENDER, BOARD_PAD = BASE_BOARD_PAD;
   let HEX_W = HEX_RENDER * Math.sqrt(3);
   let HEX_H = HEX_RENDER * 2;
@@ -281,8 +283,11 @@
     boardEl.style.height = (maxY - minY + HEX_H + BOARD_PAD * 2) + 'px';
   }
 
-  // Shrinks the whole board to fit narrow (mostly mobile) viewports instead of
-  // overflowing and forcing the page to be pinch-zoomed out to see it all.
+  // Scales the whole board to fill whichever of width or height is tighter,
+  // instead of only ever shrinking to fit narrow viewports and otherwise sitting
+  // at a fixed "natural" size - so a wider or taller window (there's more of the
+  // latter now that the hint text and separate dirpad are gone) actually grows
+  // the board instead of just leaving unused margin around it.
   function measureNaturalWidth() {
     let minX = Infinity, maxX = -Infinity;
     for (const [q, r] of ALL_CELLS) {
@@ -291,11 +296,31 @@
     }
     return (maxX - minX) + BASE_HEX_RENDER * Math.sqrt(3) + BASE_BOARD_PAD * 2;
   }
+  function measureNaturalHeight() {
+    let minY = Infinity, maxY = -Infinity;
+    for (const [q, r] of ALL_CELLS) {
+      const y = BASE_HEX_SIZE * 1.5 * r;
+      minY = Math.min(minY, y); maxY = Math.max(maxY, y);
+    }
+    return (maxY - minY) + BASE_HEX_RENDER * 2 + BASE_BOARD_PAD * 2;
+  }
   const NATURAL_WIDTH = measureNaturalWidth();
+  const NATURAL_HEIGHT = measureNaturalHeight();
+  const MAX_SCALE = 3; // generous ceiling so a huge window doesn't blow tiles up absurdly
+  const appEl = document.getElementById('app');
+  const headerEl = document.getElementById('header');
+  const navEl = document.getElementById('variant-nav');
 
   function computeScale() {
-    const available = window.innerWidth - 44; // ~ #app's horizontal padding
-    return Math.max(0.4, Math.min(1, available / NATURAL_WIDTH));
+    const appStyle = getComputedStyle(appEl);
+    const vPad = parseFloat(appStyle.paddingTop) + parseFloat(appStyle.paddingBottom);
+    const gap = parseFloat(appStyle.gap) || 16;
+    const chromeHeight = headerEl.offsetHeight + navEl.offsetHeight + vPad + gap * 2;
+    const availableWidth = window.innerWidth - 44; // ~ #app's horizontal padding
+    const availableHeight = window.innerHeight - chromeHeight;
+    const widthScale = availableWidth / NATURAL_WIDTH;
+    const heightScale = availableHeight / NATURAL_HEIGHT;
+    return Math.max(0.4, Math.min(widthScale, heightScale, MAX_SCALE));
   }
 
   function applyBoardDimensions() {
@@ -522,7 +547,7 @@
     }
   });
 
-  for (const btn of document.querySelectorAll('#dirpad button')) {
+  for (const btn of document.querySelectorAll('.edge-arrow')) {
     btn.addEventListener('click', () => move(btn.dataset.dir));
   }
 
