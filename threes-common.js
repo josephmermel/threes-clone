@@ -278,6 +278,13 @@
       elById, tileValue, tilePos, allMerges, loserFinalPos, spawnedId,
       boardEl, cellPos, createTileEl, milestoneIds, spawnEnterFrom,
       slideMs = 130, winnerFlipMs = 260, loserFlipMs = slideMs + 20,
+      // Repainting a tile in place (a merge result, or a wildcard's flip-reveal)
+      // needs the same scale-correction a freshly-created tile gets from the
+      // caller's own createTileEl - otherwise a merged tile's font snaps back to
+      // the unscaled base size while every other tile stays correctly scaled.
+      // Callers should pass scale-aware wrappers; these bare functions are only
+      // a fallback for scale === 1.
+      paintTile: paintTileFn = paintTile, paintNumeral: paintNumeralFn = paintNumeral,
     } = ctx;
     const winnerMeta = new Map(allMerges.map(m => [m.winnerId, m]));
 
@@ -294,7 +301,7 @@
 
       if (loserWasWild) {
         el.classList.add('wild-loser-flip');
-        setTimeout(() => paintNumeral(el, revealValue), Math.round(loserFlipMs * 0.5));
+        setTimeout(() => paintNumeralFn(el, revealValue), Math.round(loserFlipMs * 0.5));
       } else {
         el.style.opacity = '0';
         el.style.transform = 'scale(0.4)';
@@ -322,14 +329,14 @@
         setTimeout(() => {
           el.classList.remove('merging');
           el.classList.add('wild-winner-flip');
-          setTimeout(() => paintTile(el, meta.newValue), Math.round(winnerFlipMs * 0.5));
+          setTimeout(() => paintTileFn(el, meta.newValue), Math.round(winnerFlipMs * 0.5));
           setTimeout(() => el.classList.remove('wild-winner-flip'), winnerFlipMs);
         }, slideMs);
       } else if (meta) {
         const value = tileValue[id];
         const isMilestone = milestoneIds && milestoneIds.has(id);
         setTimeout(() => {
-          paintTile(el, value);
+          paintTileFn(el, value);
           el.classList.remove('merging', 'milestone-pop');
           void el.offsetWidth;
           el.classList.add(isMilestone ? 'milestone-pop' : 'merging');

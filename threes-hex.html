@@ -69,14 +69,14 @@
   .edge-bar {
     position: absolute;
     padding: 0;
-    border: none;
+    border: 1px solid rgba(0,0,0,0.16);
     border-radius: 999px;
-    background: #f4a340;
+    background: var(--board-bg);
     box-shadow: 0 2px 4px rgba(0,0,0,0.35);
     cursor: pointer;
     pointer-events: auto;
   }
-  .edge-bar:active { background: #ffb75c; }
+  .edge-bar:active { background: #d5d5d8; }
 </style>
 </head>
 <body>
@@ -127,7 +127,7 @@
     WILD, pickRandom, cellKey, parseKey,
     currentMaxValue,
     resolveMove, isGameOver: commonIsGameOver,
-    paintTile, renderNextIndicator, updatePageBackground, animateMove,
+    paintTile, paintNumeral, renderNextIndicator, updatePageBackground, animateMove,
     attachDragControls, attachFullscreenToggle,
   } = ThreesCommon;
 
@@ -297,19 +297,26 @@
   if (HAS_TOUCH) edgeBarsEl.style.display = 'none';
 
   // Positions the 6 edge bars just outside the board's current pixel box: one
-  // centered on each side (E/W), two each on the top/bottom edges (a third of
-  // the way in from each corner) - all computed from BOARD_W/H rather than CSS
+  // centered on each side (E/W, which the E-W axis already crosses at exact
+  // half-height), and two each on the top/bottom edges - not at an arbitrary
+  // third of the width, but where the other two 60-degree axes (through the
+  // board's center, in the NE/SW and NW/SE directions) actually cross those
+  // edges. For a line through the center at 60 degrees from horizontal, that
+  // crossing is offset from the horizontal center by (height/2)*tan(30deg),
+  // i.e. height/(2*sqrt(3)) - depends on the board's aspect ratio, not just a
+  // fraction of its width. All computed from BOARD_W/H rather than CSS
   // percentages, since "just outside, with a fixed gap" needs actual pixels.
   function layoutEdgeBars() {
     if (HAS_TOUCH) return;
     const len = BASE_BAR_LENGTH * SCALE, thick = BASE_BAR_THICKNESS * SCALE, gap = BASE_BAR_GAP * SCALE;
+    const axisOffsetX = BOARD_H / (2 * Math.sqrt(3));
     const specs = {
-      W:  { cx: -(gap + thick / 2),           cy: BOARD_H / 2,          w: thick, h: len },
-      E:  { cx: BOARD_W + gap + thick / 2,     cy: BOARD_H / 2,          w: thick, h: len },
-      NW: { cx: BOARD_W / 3,                   cy: -(gap + thick / 2),   w: len,   h: thick },
-      NE: { cx: BOARD_W * 2 / 3,                cy: -(gap + thick / 2),   w: len,   h: thick },
-      SW: { cx: BOARD_W / 3,                   cy: BOARD_H + gap + thick / 2, w: len, h: thick },
-      SE: { cx: BOARD_W * 2 / 3,                cy: BOARD_H + gap + thick / 2, w: len, h: thick },
+      W:  { cx: -(gap + thick / 2),              cy: BOARD_H / 2,               w: thick, h: len },
+      E:  { cx: BOARD_W + gap + thick / 2,        cy: BOARD_H / 2,               w: thick, h: len },
+      NW: { cx: BOARD_W / 2 - axisOffsetX,        cy: -(gap + thick / 2),        w: len,   h: thick },
+      NE: { cx: BOARD_W / 2 + axisOffsetX,        cy: -(gap + thick / 2),        w: len,   h: thick },
+      SW: { cx: BOARD_W / 2 - axisOffsetX,        cy: BOARD_H + gap + thick / 2, w: len,   h: thick },
+      SE: { cx: BOARD_W / 2 + axisOffsetX,        cy: BOARD_H + gap + thick / 2, w: len,   h: thick },
     };
     for (const dir in specs) {
       const s = specs[dir], el = edgeBarEls[dir];
@@ -414,11 +421,22 @@
     el.style.fontSize = (parseFloat(el.style.fontSize) * SCALE) + 'px';
   }
 
+  // paintTile/paintNumeral set a fixed base font-size; wrap them so every call
+  // site (including a merge repainting a tile in place, via animateMove) gets
+  // the current scale applied too, not just freshly-created tiles.
+  function paintTileScaled(el, value) {
+    paintTile(el, value);
+    scaleFont(el);
+  }
+  function paintNumeralScaled(el, value) {
+    paintNumeral(el, value);
+    scaleFont(el);
+  }
+
   function makeTileEl(value, q, r, spawning) {
     const el = document.createElement('div');
     el.className = 'tile hex-shape' + (spawning ? ' spawning' : '');
-    paintTile(el, value);
-    scaleFont(el);
+    paintTileScaled(el, value);
     el.style.width = HEX_W + 'px';
     el.style.height = HEX_H + 'px';
     const { left, top } = cellPos(q, r);
@@ -441,8 +459,7 @@
     for (const [id, el] of elById) {
       el.style.width = HEX_W + 'px';
       el.style.height = HEX_H + 'px';
-      paintTile(el, tileValue[id]);
-      scaleFont(el);
+      paintTileScaled(el, tileValue[id]);
       const [q, r] = tilePos[id];
       const { left, top } = cellPos(q, r);
       el.style.left = left + 'px';
@@ -553,6 +570,7 @@
       elById, tileValue, tilePos, allMerges: result.allMerges, loserFinalPos: result.loserFinalPos, spawnedId,
       boardEl, cellPos, createTileEl: makeTileEl, milestoneIds, spawnEnterFrom,
       slideMs: SLIDE_MS, winnerFlipMs: WINNER_FLIP_MS, loserFlipMs: LOSER_FLIP_MS,
+      paintTile: paintTileScaled, paintNumeral: paintNumeralScaled,
     });
     renderNextIndicator(nextIndicatorEl, nextValue, TRIPLE_HINT_CHANCE);
     updatePageBackground(highestMatchValue);

@@ -72,7 +72,7 @@
     WILD, shuffledBag, pickRandom, cellKey, parseKey,
     currentMaxValue, randomBonusValue,
     resolveMove, isGameOver: commonIsGameOver,
-    paintTile, renderNextIndicator, updatePageBackground, animateMove,
+    paintTile, paintNumeral, renderNextIndicator, updatePageBackground, animateMove,
     attachDragControls, attachFullscreenToggle,
   } = ThreesCommon;
 
@@ -181,11 +181,22 @@
     el.style.fontSize = (parseFloat(el.style.fontSize) * SCALE) + 'px';
   }
 
+  // paintTile/paintNumeral set a fixed base font-size; wrap them so every call
+  // site (including a merge repainting a tile in place, via animateMove) gets
+  // the current scale applied too, not just freshly-created tiles.
+  function paintTileScaled(el, value) {
+    paintTile(el, value);
+    scaleFont(el);
+  }
+  function paintNumeralScaled(el, value) {
+    paintNumeral(el, value);
+    scaleFont(el);
+  }
+
   function makeTileEl(value, r, c, spawning) {
     const el = document.createElement('div');
     el.className = 'tile' + (spawning ? ' spawning' : '');
-    paintTile(el, value);
-    scaleFont(el);
+    paintTileScaled(el, value);
     el.style.width = CELL + 'px';
     el.style.height = CELL + 'px';
     const { left, top } = cellPos(r, c);
@@ -219,8 +230,7 @@
     for (const [id, el] of elById) {
       el.style.width = CELL + 'px';
       el.style.height = CELL + 'px';
-      paintTile(el, tileValue[id]);
-      scaleFont(el);
+      paintTileScaled(el, tileValue[id]);
       const [r, c] = tilePos[id];
       const { left, top } = cellPos(r, c);
       el.style.left = left + 'px';
@@ -323,6 +333,7 @@
       elById, tileValue, tilePos, allMerges: result.allMerges, loserFinalPos: result.loserFinalPos, spawnedId,
       boardEl, cellPos, createTileEl: makeTileEl, milestoneIds, spawnEnterFrom,
       slideMs: SLIDE_MS, winnerFlipMs: WINNER_FLIP_MS, loserFlipMs: LOSER_FLIP_MS,
+      paintTile: paintTileScaled, paintNumeral: paintNumeralScaled,
     });
     renderNextIndicator(nextIndicatorEl, nextValue, TRIPLE_HINT_CHANCE);
     updatePageBackground(highestMatchValue);
