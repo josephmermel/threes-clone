@@ -52,37 +52,31 @@
             drop-shadow(0 0 1px rgba(255,255,255,0.6));
   }
 
-  /* Six slide buttons live right on the board's edge instead of a separate panel
-     below it - siblings of #board (not children), positioned by percentage so
-     they track its size exactly and stay put on resize with no JS involved.
-     Each is a small triangle (clip-path, since border/box-shadow don't render
-     evenly on a clipped shape - drop-shadow again, as with the hex tiles) that
-     points outward at its own direction. */
-  #edge-arrows {
+  /* Six slide controls sit just outside the board's grey square instead of
+     overlapping its tiles - siblings of #board, positioned in JS (their exact
+     placement depends on the board's current pixel size, which already only
+     exists as a JS value) as small pill-shaped bars along each edge: one
+     centered on each side edge (E/W), two on the top edge and two on the
+     bottom edge (NW/NE/SW/SE), each roughly a third of the way in from the
+     corners. #board-wrap gets extra margin (also computed in JS) so there's
+     room for them to sit in without colliding with the header or footer link. */
+  #edge-bars {
     position: absolute;
     inset: 0;
     pointer-events: none;
-    z-index: 6; /* above tiles/merge effects (z-index up to 5), below the game-over overlay (10) */
+    z-index: 6;
   }
-  .edge-arrow {
+  .edge-bar {
     position: absolute;
-    width: 34px;
-    height: 30px;
     padding: 0;
     border: none;
+    border-radius: 999px;
     background: #f4a340;
-    clip-path: polygon(50% 0%, 100% 100%, 0% 100%);
-    filter: drop-shadow(0 2px 4px rgba(0,0,0,0.4));
+    box-shadow: 0 2px 4px rgba(0,0,0,0.35);
     cursor: pointer;
     pointer-events: auto;
   }
-  .edge-arrow:active { background: #ffb75c; }
-  .edge-arrow.dir-E  { left: 100%;  top: 50%;   transform: translate(-50%, -50%) rotate(90deg); }
-  .edge-arrow.dir-SE { left: 75%;   top: 93.3%; transform: translate(-50%, -50%) rotate(150deg); }
-  .edge-arrow.dir-SW { left: 25%;   top: 93.3%; transform: translate(-50%, -50%) rotate(210deg); }
-  .edge-arrow.dir-W  { left: 0%;    top: 50%;   transform: translate(-50%, -50%) rotate(270deg); }
-  .edge-arrow.dir-NW { left: 25%;   top: 6.7%;  transform: translate(-50%, -50%) rotate(330deg); }
-  .edge-arrow.dir-NE { left: 75%;   top: 6.7%;  transform: translate(-50%, -50%) rotate(30deg); }
+  .edge-bar:active { background: #ffb75c; }
 </style>
 </head>
 <body>
@@ -110,13 +104,13 @@
     </div>
     <div id="board-wrap">
       <div id="board"></div>
-      <div id="edge-arrows">
-        <button class="edge-arrow dir-NW" data-dir="NW" aria-label="Slide NW"></button>
-        <button class="edge-arrow dir-NE" data-dir="NE" aria-label="Slide NE"></button>
-        <button class="edge-arrow dir-E" data-dir="E" aria-label="Slide E"></button>
-        <button class="edge-arrow dir-SE" data-dir="SE" aria-label="Slide SE"></button>
-        <button class="edge-arrow dir-SW" data-dir="SW" aria-label="Slide SW"></button>
-        <button class="edge-arrow dir-W" data-dir="W" aria-label="Slide W"></button>
+      <div id="edge-bars">
+        <button class="edge-bar" data-dir="NW" aria-label="Slide NW"></button>
+        <button class="edge-bar" data-dir="NE" aria-label="Slide NE"></button>
+        <button class="edge-bar" data-dir="E" aria-label="Slide E"></button>
+        <button class="edge-bar" data-dir="SE" aria-label="Slide SE"></button>
+        <button class="edge-bar" data-dir="SW" aria-label="Slide SW"></button>
+        <button class="edge-bar" data-dir="W" aria-label="Slide W"></button>
       </div>
       <div id="overlay" class="hidden">
         <div id="overlay-text">Game Over</div>
@@ -155,6 +149,16 @@
   const WILDCARD_CHANCE = 0.05;
   const TRIPLE_HINT_CHANCE = 0.6;
   const STARTER_FILL_RATIO = 0.4; // fraction of cells occupied at the start of a game
+
+  // A touch-capable device can already slide tiles by dragging, so the edge bars
+  // (mainly useful as a discoverable, precise click target for mouse/keyboard use)
+  // just add clutter there - detect touch once up front and skip reserving any
+  // room for them at all when it's present, rather than merely hiding them.
+  const HAS_TOUCH = ('ontouchstart' in window) || navigator.maxTouchPoints > 0;
+  const BASE_BAR_LENGTH = 42;
+  const BASE_BAR_THICKNESS = 14;
+  const BASE_BAR_GAP = 6; // breathing room between the board's edge and a bar
+  const BASE_EDGE_CLEARANCE = HAS_TOUCH ? 0 : (BASE_BAR_THICKNESS + BASE_BAR_GAP);
 
   // --- Tile spawn distribution ---------------------------------------------
   // Ramping up bonus-tile frequency (the previous approach) backfired: big
@@ -263,6 +267,7 @@
   // board sits at non-negative coordinates with BOARD_PAD margin. Recomputed
   // whenever HEX_SIZE/HEX_RENDER/BOARD_PAD change (i.e. on responsive rescale).
   let CELL_PIXEL = {};
+  let BOARD_W = 0, BOARD_H = 0; // current board pixel size, read by layoutEdgeBars()
   function layoutHex() {
     let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
     const centers = {};
@@ -279,8 +284,40 @@
     for (const key in centers) {
       CELL_PIXEL[key] = { left: centers[key].x + offsetX - HEX_W / 2, top: centers[key].y + offsetY - HEX_H / 2 };
     }
-    boardEl.style.width = (maxX - minX + HEX_W + BOARD_PAD * 2) + 'px';
-    boardEl.style.height = (maxY - minY + HEX_H + BOARD_PAD * 2) + 'px';
+    BOARD_W = maxX - minX + HEX_W + BOARD_PAD * 2;
+    BOARD_H = maxY - minY + HEX_H + BOARD_PAD * 2;
+    boardEl.style.width = BOARD_W + 'px';
+    boardEl.style.height = BOARD_H + 'px';
+  }
+
+  const edgeBarsEl = document.getElementById('edge-bars');
+  const boardWrapEl = document.getElementById('board-wrap');
+  const edgeBarEls = {};
+  for (const btn of document.querySelectorAll('.edge-bar')) edgeBarEls[btn.dataset.dir] = btn;
+  if (HAS_TOUCH) edgeBarsEl.style.display = 'none';
+
+  // Positions the 6 edge bars just outside the board's current pixel box: one
+  // centered on each side (E/W), two each on the top/bottom edges (a third of
+  // the way in from each corner) - all computed from BOARD_W/H rather than CSS
+  // percentages, since "just outside, with a fixed gap" needs actual pixels.
+  function layoutEdgeBars() {
+    if (HAS_TOUCH) return;
+    const len = BASE_BAR_LENGTH * SCALE, thick = BASE_BAR_THICKNESS * SCALE, gap = BASE_BAR_GAP * SCALE;
+    const specs = {
+      W:  { cx: -(gap + thick / 2),           cy: BOARD_H / 2,          w: thick, h: len },
+      E:  { cx: BOARD_W + gap + thick / 2,     cy: BOARD_H / 2,          w: thick, h: len },
+      NW: { cx: BOARD_W / 3,                   cy: -(gap + thick / 2),   w: len,   h: thick },
+      NE: { cx: BOARD_W * 2 / 3,                cy: -(gap + thick / 2),   w: len,   h: thick },
+      SW: { cx: BOARD_W / 3,                   cy: BOARD_H + gap + thick / 2, w: len, h: thick },
+      SE: { cx: BOARD_W * 2 / 3,                cy: BOARD_H + gap + thick / 2, w: len, h: thick },
+    };
+    for (const dir in specs) {
+      const s = specs[dir], el = edgeBarEls[dir];
+      el.style.width = s.w + 'px';
+      el.style.height = s.h + 'px';
+      el.style.left = (s.cx - s.w / 2) + 'px';
+      el.style.top = (s.cy - s.h / 2) + 'px';
+    }
   }
 
   // Scales the whole board to fill whichever of width or height is tighter,
@@ -294,7 +331,7 @@
       const x = BASE_HEX_SIZE * Math.sqrt(3) * (q + r / 2);
       minX = Math.min(minX, x); maxX = Math.max(maxX, x);
     }
-    return (maxX - minX) + BASE_HEX_RENDER * Math.sqrt(3) + BASE_BOARD_PAD * 2;
+    return (maxX - minX) + BASE_HEX_RENDER * Math.sqrt(3) + BASE_BOARD_PAD * 2 + BASE_EDGE_CLEARANCE * 2;
   }
   function measureNaturalHeight() {
     let minY = Infinity, maxY = -Infinity;
@@ -302,7 +339,7 @@
       const y = BASE_HEX_SIZE * 1.5 * r;
       minY = Math.min(minY, y); maxY = Math.max(maxY, y);
     }
-    return (maxY - minY) + BASE_HEX_RENDER * 2 + BASE_BOARD_PAD * 2;
+    return (maxY - minY) + BASE_HEX_RENDER * 2 + BASE_BOARD_PAD * 2 + BASE_EDGE_CLEARANCE * 2;
   }
   const NATURAL_WIDTH = measureNaturalWidth();
   const NATURAL_HEIGHT = measureNaturalHeight();
@@ -331,6 +368,8 @@
     HEX_H = HEX_RENDER * 2;
     BOARD_PAD = BASE_BOARD_PAD * SCALE;
     layoutHex();
+    boardWrapEl.style.margin = (BASE_EDGE_CLEARANCE * SCALE) + 'px';
+    layoutEdgeBars();
   }
 
   function cellPos(q, r) {
@@ -547,7 +586,7 @@
     }
   });
 
-  for (const btn of document.querySelectorAll('.edge-arrow')) {
+  for (const btn of document.querySelectorAll('.edge-bar')) {
     btn.addEventListener('click', () => move(btn.dataset.dir));
   }
 
