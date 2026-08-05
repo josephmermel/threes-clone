@@ -52,26 +52,39 @@ body {
   width: 100%;
   justify-content: space-between;
 }
-#stats {
+/* Its own row between the header and the board, rather than crammed into the
+   header bar - a little scoreboard moment, so it gets a bigger, bolder,
+   more playful treatment than any of the header's small utility text. */
+#score-row {
   display: flex;
+  flex-direction: column;
   align-items: center;
-  gap: 16px;
+  gap: 2px;
+  margin: 20px 0 4px;
 }
-#score-box {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  font-size: 14px;
+#score-label {
+  font-size: 13px;
+  font-weight: 700;
   text-transform: uppercase;
-  letter-spacing: 1px;
-  opacity: 0.9;
+  letter-spacing: 3px;
+  opacity: 0.55;
 }
 #score-value {
-  font-size: 18px;
+  font-size: 46px;
   font-weight: 800;
-  text-transform: none;
-  letter-spacing: normal;
+  letter-spacing: 1px;
+  font-variant-numeric: tabular-nums;
+  color: #f4a340;
+  text-shadow: 0 3px 0 rgba(0,0,0,0.1);
+  line-height: 1;
+  transition: transform 0.2s ease;
 }
+@keyframes scorePop {
+  0%   { transform: scale(1); }
+  40%  { transform: scale(1.28); }
+  100% { transform: scale(1); }
+}
+#score-value.pop { animation: scorePop 0.3s ease-out; }
 #brand {
   display: flex;
   align-items: center;
@@ -152,9 +165,9 @@ button.icon-btn:active { transform: scale(0.94); }
   #brand { gap: 6px; }
   #brand img { width: 32px; height: 32px; }
   #brand span { display: none; }
-  #stats { gap: 8px; }
-  #score-box { font-size: 11px; gap: 4px; }
-  #score-value { font-size: 14px; }
+  #score-row { margin: 12px 0 2px; }
+  #score-label { font-size: 11px; letter-spacing: 2px; }
+  #score-value { font-size: 34px; }
   #next-tile-box { font-size: 11px; gap: 4px; }
   #next-indicator { gap: 4px; }
   .tile.preview { width: 38px; height: 38px; font-size: 15px; }

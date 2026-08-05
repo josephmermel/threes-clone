@@ -93,17 +93,18 @@
         <img src="icon-hex.svg" width="40" height="40" alt="">
         <span>Threes! Hex</span>
       </div>
-      <div id="stats">
-        <div id="score-box">Score <span id="score-value">0</span></div>
-        <div id="next-tile-box">
-          Next
-          <div id="next-indicator"></div>
-        </div>
+      <div id="next-tile-box">
+        Next
+        <div id="next-indicator"></div>
       </div>
       <div id="header-actions">
         <button class="icon-btn" id="fullscreen-btn" title="Fullscreen" aria-label="Toggle fullscreen">⛶</button>
         <button class="game-btn" id="restart-btn">Restart</button>
       </div>
+    </div>
+    <div id="score-row">
+      <div id="score-label">Score</div>
+      <div id="score-value">0</div>
     </div>
     <div id="main">
       <div id="board-wrap">
@@ -359,19 +360,24 @@
   const MAX_SCALE = 3; // generous ceiling so a huge window doesn't blow tiles up absurdly
   const appEl = document.getElementById('app');
   const headerEl = document.getElementById('header');
+  const scoreRowEl = document.getElementById('score-row');
   const mainEl = document.getElementById('main');
   const navEl = document.getElementById('variant-nav');
 
-  // Non-board vertical chrome: #app's own top/bottom padding, the gap between
-  // #header and #main, header's own height, the gap between the board and the
-  // footer link inside #main, and the footer link's own height.
+  // Non-board vertical chrome: #app's own top/bottom padding, the 2 gaps between
+  // its 3 children (header / score row / main), header's and the score row's
+  // own height (plus the score row's own margin), the gap between the board
+  // and the footer link inside #main, and the footer link's own height.
   function computeScale() {
     const appStyle = getComputedStyle(appEl);
     const mainStyle = getComputedStyle(mainEl);
+    const scoreRowStyle = getComputedStyle(scoreRowEl);
     const vPad = parseFloat(appStyle.paddingTop) + parseFloat(appStyle.paddingBottom);
     const appGap = parseFloat(appStyle.gap) || 16;
     const mainGap = parseFloat(mainStyle.gap) || 16;
-    const chromeHeight = headerEl.offsetHeight + navEl.offsetHeight + vPad + appGap + mainGap;
+    const scoreRowMargin = parseFloat(scoreRowStyle.marginTop) + parseFloat(scoreRowStyle.marginBottom);
+    const chromeHeight = headerEl.offsetHeight + scoreRowEl.offsetHeight + scoreRowMargin
+      + navEl.offsetHeight + vPad + appGap * 2 + mainGap;
     const availableWidth = window.innerWidth - 44; // ~ #app's horizontal padding
     const availableHeight = window.innerHeight - chromeHeight;
     const widthScale = availableWidth / NATURAL_WIDTH;
@@ -587,7 +593,13 @@
     });
     renderNextIndicator(nextIndicatorEl, nextValue, TRIPLE_HINT_CHANCE);
     updatePageBackground(highestMatchValue);
-    scoreValueEl.textContent = boardScore(tileValue).toLocaleString();
+    const newScore = boardScore(tileValue).toLocaleString();
+    if (newScore !== scoreValueEl.textContent) {
+      scoreValueEl.textContent = newScore;
+      scoreValueEl.classList.remove('pop');
+      void scoreValueEl.offsetWidth;
+      scoreValueEl.classList.add('pop');
+    }
 
     if (commonIsGameOver(grid, tileValue, ALL_KEYS, NEIGHBOR_PAIRS)) {
       overlayTextEl.textContent = 'Game Over';

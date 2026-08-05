@@ -45,17 +45,18 @@
         <img src="icon-square.svg" width="40" height="40" alt="">
         <span>Threes!</span>
       </div>
-      <div id="stats">
-        <div id="score-box">Score <span id="score-value">0</span></div>
-        <div id="next-tile-box">
-          Next
-          <div id="next-indicator"></div>
-        </div>
+      <div id="next-tile-box">
+        Next
+        <div id="next-indicator"></div>
       </div>
       <div id="header-actions">
         <button class="icon-btn" id="fullscreen-btn" title="Fullscreen" aria-label="Toggle fullscreen">⛶</button>
         <button class="game-btn" id="restart-btn">Restart</button>
       </div>
+    </div>
+    <div id="score-row">
+      <div id="score-label">Score</div>
+      <div id="score-value">0</div>
     </div>
     <div id="main">
       <div id="board-wrap">
@@ -344,7 +345,13 @@
     });
     renderNextIndicator(nextIndicatorEl, nextValue, TRIPLE_HINT_CHANCE);
     updatePageBackground(highestMatchValue);
-    scoreValueEl.textContent = boardScore(tileValue).toLocaleString();
+    const newScore = boardScore(tileValue).toLocaleString();
+    if (newScore !== scoreValueEl.textContent) {
+      scoreValueEl.textContent = newScore;
+      scoreValueEl.classList.remove('pop');
+      void scoreValueEl.offsetWidth;
+      scoreValueEl.classList.add('pop');
+    }
 
     if (commonIsGameOver(grid, tileValue, ALL_KEYS, NEIGHBOR_PAIRS)) {
       overlayTextEl.textContent = 'Game Over';
