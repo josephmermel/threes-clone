@@ -132,7 +132,7 @@
 <script>
 (function () {
   const {
-    WILD, shuffledBag, pickRandom, cellKey, parseKey,
+    WILD, pickRandom, cellKey, parseKey,
     currentMaxValue,
     resolveMove, isGameOver: commonIsGameOver,
     paintTile, renderNextIndicator, updatePageBackground, animateMove,
@@ -152,11 +152,40 @@
   const LOSER_FLIP_MS = SLIDE_MS + 20;
   const WILDCARD_CHANCE = 0.05;
   const TRIPLE_HINT_CHANCE = 0.6;
-  const BONUS_MIN_MAX = 6;
-  const BONUS_CHANCE = 0.12;    // bonus-tile chance right when it first becomes eligible
-  const BONUS_CHANCE_STEP = 0.05; // added per doubling of the board's record tile
-  const BONUS_CHANCE_CAP = 0.5;   // ...up to this much of the time
-  const STARTER_SIX_CHANCE = 0.15; // chance a starting tile is a 6 instead of a plain 1/2/3 draw
+  const STARTER_FILL_RATIO = 0.4; // fraction of cells occupied at the start of a game
+
+  // --- Tile spawn distribution ---------------------------------------------
+  // Ramping up bonus-tile frequency (the previous approach) backfired: big
+  // tiles showed up often enough that a match was already sitting on the
+  // board, which made merging *easier*, not harder. Instead, cap how large a
+  // spawned tile can be at a quarter of the highest value the player has
+  // actually matched so far (not just whatever's on the board) - so most tile
+  // growth has to come from merging low tiles up rather than being handed a
+  // big one outright. Within that allowed range, 1s and 2s always keep a
+  // strong flat boost, and the doubling-chain values above 3 recede
+  // geometrically the higher they go, so a tile near the current cap stays
+  // rare even late-game.
+  const SPAWN_CAP = 96;          // hard ceiling regardless of how far the match record goes
+  const LOW_VALUE_BOOST = 2.5;   // relative weight of a plain 1 or 2 draw
+  const CHAIN_DECAY = 0.55;      // each step up the doubling chain is this fraction as likely
+
+  function maxSpawnValue(matchValue) {
+    if (matchValue < 12) return 2;
+    return Math.min(SPAWN_CAP, matchValue / 4);
+  }
+
+  function pickSpawnValue(matchValue) {
+    const cap = maxSpawnValue(matchValue);
+    const entries = [{ v: 1, w: LOW_VALUE_BOOST }, { v: 2, w: LOW_VALUE_BOOST }];
+    for (let v = 3, i = 0; v <= cap; v *= 2, i++) entries.push({ v, w: Math.pow(CHAIN_DECAY, i + 1) });
+    const total = entries.reduce((sum, e) => sum + e.w, 0);
+    let r = Math.random() * total;
+    for (const e of entries) {
+      r -= e.w;
+      if (r < 0) return e.v;
+    }
+    return entries[entries.length - 1].v;
+  }
 
   const boardEl = document.getElementById('board');
   const nextIndicatorEl = document.getElementById('next-indicator');
@@ -278,49 +307,15 @@
   let idCounter;
   let nextValue;
   let recordMax;  // highest tile value seen so far this game, for milestone celebrations
-  let highestMatchValue; // highest value produced by an actual merge so far (0 = none yet); drives the page background
-  let deck = [];
-
-  function drawValue() {
-    if (deck.length === 0) deck = shuffledBag();
-    return deck.pop();
-  }
+  let highestMatchValue; // highest value produced by an actual merge so far (0 = none yet); drives the page background and the spawn cap
 
   function drawStarterValue() {
-    return Math.random() < STARTER_SIX_CHANCE ? 6 : drawValue();
-  }
-
-  // Every hex tile can have up to 6 neighbors, so matches come easy and the board
-  // rarely fills up on a steady diet of 1/2/3s that merge away as fast as they land.
-  // Two adjustments counteract that as the game goes on: bonus (>3) tiles get more
-  // frequent per doubling of the record tile, and the bonus value itself is biased
-  // toward the top of the chain instead of picked uniformly - so late-game draws
-  // skew toward genuinely large, harder-to-match tiles rather than mostly still 6s.
-  function bonusChanceFor(maxVal) {
-    const doublings = Math.max(0, Math.round(Math.log2(maxVal / BONUS_MIN_MAX)));
-    return Math.min(BONUS_CHANCE_CAP, BONUS_CHANCE + doublings * BONUS_CHANCE_STEP);
-  }
-
-  function weightedBonusValue(maxVal) {
-    const cap = Math.max(6, maxVal);
-    const chain = [];
-    for (let v = 6; v <= cap; v *= 2) chain.push(v);
-    const totalWeight = (chain.length * (chain.length + 1)) / 2;
-    let r = Math.random() * totalWeight;
-    for (let i = 0; i < chain.length; i++) {
-      r -= (i + 1);
-      if (r < 0) return chain[i];
-    }
-    return chain[chain.length - 1];
+    return pickSpawnValue(0);
   }
 
   function drawNextValue() {
     if (Math.random() < WILDCARD_CHANCE) return WILD;
-    const maxVal = currentMaxValue(tileValue);
-    if (maxVal >= BONUS_MIN_MAX && Math.random() < bonusChanceFor(maxVal)) {
-      return weightedBonusValue(maxVal);
-    }
-    return drawValue();
+    return pickSpawnValue(highestMatchValue);
   }
 
   function emptyKeys() {
@@ -385,7 +380,6 @@
     tilePos = {};
     elById = new Map();
     idCounter = 1;
-    deck = shuffledBag();
 
     boardEl.innerHTML = '';
     cellBgEls = [];
@@ -402,7 +396,8 @@
     }
 
     const starterIds = [];
-    for (let i = 0; i < 5; i++) {
+    const starterCount = Math.round(ALL_CELLS.length * STARTER_FILL_RATIO);
+    for (let i = 0; i < starterCount; i++) {
       const id = placeRandomTile(drawStarterValue());
       if (id) starterIds.push(id);
     }
