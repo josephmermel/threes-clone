@@ -412,9 +412,16 @@
   //   deadzone: px of initial movement before a direction is locked in (default 10)
   //   overlayClass: extra class(es) added to the merge-preview overlay element, e.g.
   //     to reuse a board's tile-shape clip-path (optional)
+  // hitAreaEl (defaults to boardEl) is what actually listens for the pointer
+  // gesture - it can be a bigger container than the board itself (e.g. the
+  // whole centered column around it, so a swipe anywhere in that blank space
+  // still slides tiles, not just a swipe that starts exactly on a tile).
+  // boardEl stays the anchor for the merge-preview overlay's own positioning,
+  // since cellPos() returns coordinates relative to the board's own box
+  // regardless of where the gesture happened to start.
   function attachDragControls(opts) {
     const {
-      boardEl, isBlocked, pickDirection, pitchForDir, unitForDir,
+      boardEl, hitAreaEl = opts.boardEl, isBlocked, pickDirection, pitchForDir, unitForDir,
       computeMoveResult, getTilePos, getElById, cellPos, getTileSize, commit,
       commitFraction = 0.5, deadzone = 10, overlayClass = '',
     } = opts;
@@ -483,13 +490,13 @@
       for (const ov of preview.overlays) ov.el.remove();
     }
 
-    boardEl.addEventListener('pointerdown', (e) => {
+    hitAreaEl.addEventListener('pointerdown', (e) => {
       if (isBlocked()) return;
       drag = { startX: e.clientX, startY: e.clientY, dir: null, preview: null, t: 0 };
-      boardEl.setPointerCapture(e.pointerId);
+      hitAreaEl.setPointerCapture(e.pointerId);
     });
 
-    boardEl.addEventListener('pointermove', (e) => {
+    hitAreaEl.addEventListener('pointermove', (e) => {
       if (!drag) return;
       const dx = e.clientX - drag.startX, dy = e.clientY - drag.startY;
       if (!drag.dir) {
@@ -522,8 +529,8 @@
         }
       }
     }
-    boardEl.addEventListener('pointerup', finish);
-    boardEl.addEventListener('pointercancel', finish);
+    hitAreaEl.addEventListener('pointerup', finish);
+    hitAreaEl.addEventListener('pointercancel', finish);
   }
 
   // Wires a button to toggle fullscreen on the whole page, swapping its glyph
@@ -544,6 +551,28 @@
     });
   }
 
+  // Wires a trigger button to toggle a dropdown menu open/closed, closing it
+  // on an outside click, an Escape press, or picking one of its links (a plain
+  // navigation, so no explicit close handler needed there).
+  function attachDropdownMenu(triggerBtn, menuEl) {
+    function close() {
+      menuEl.classList.remove('open');
+      triggerBtn.setAttribute('aria-expanded', 'false');
+    }
+    triggerBtn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      const opening = !menuEl.classList.contains('open');
+      menuEl.classList.toggle('open', opening);
+      triggerBtn.setAttribute('aria-expanded', String(opening));
+    });
+    document.addEventListener('click', (e) => {
+      if (!menuEl.contains(e.target) && e.target !== triggerBtn) close();
+    });
+    document.addEventListener('keydown', (e) => {
+      if (e.key === 'Escape') close();
+    });
+  }
+
   global.ThreesCommon = {
     WILD, shuffledBag, pickRandom, cellKey, parseKey,
     canMerge, partnerValue, mergeValue, collapseLineWithIds,
@@ -551,6 +580,6 @@
     currentMaxValue, randomBonusValue, scoreForValue, boardScore,
     CANDY_PALETTE, tileColor, paintNumeral, paintTile,
     miniFontSize, makePreviewTile, renderNextIndicator, updatePageBackground,
-    animateMove, attachDragControls, attachFullscreenToggle,
+    animateMove, attachDragControls, attachFullscreenToggle, attachDropdownMenu,
   };
 })(window);

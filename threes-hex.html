@@ -90,8 +90,13 @@
   <div id="app">
     <div id="header">
       <div id="brand">
-        <img src="icon-hex.svg" width="40" height="40" alt="">
+        <button id="brand-btn" aria-haspopup="true" aria-expanded="false" aria-label="Menu">
+          <img src="icon-hex.svg" width="40" height="40" alt="">
+        </button>
         <span>Threes! Hex</span>
+        <div id="variant-menu">
+          <a href="index.html">&larr; Back to the classic square game</a>
+        </div>
       </div>
       <div id="next-tile-box">
         Next
@@ -122,7 +127,6 @@
           <button class="game-btn" id="overlay-restart">Try Again</button>
         </div>
       </div>
-      <div id="variant-nav"><a href="index.html">&larr; Back to the classic square game</a></div>
     </div>
   </div>
 
@@ -134,7 +138,7 @@
     currentMaxValue, boardScore,
     resolveMove, isGameOver: commonIsGameOver,
     paintTile, paintNumeral, renderNextIndicator, updatePageBackground, animateMove,
-    attachDragControls, attachFullscreenToggle,
+    attachDragControls, attachFullscreenToggle, attachDropdownMenu,
   } = ThreesCommon;
 
   const RADIUS = 2;
@@ -362,22 +366,20 @@
   const headerEl = document.getElementById('header');
   const scoreRowEl = document.getElementById('score-row');
   const mainEl = document.getElementById('main');
-  const navEl = document.getElementById('variant-nav');
 
   // Non-board vertical chrome: #app's own top/bottom padding, the 2 gaps between
-  // its 3 children (header / score row / main), header's and the score row's
-  // own height (plus the score row's own margin), the gap between the board
-  // and the footer link inside #main, and the footer link's own height.
+  // its 3 children (header / score row / main), and header's and the score
+  // row's own height (plus the score row's own margin). #main now holds only
+  // the board (the footer link that used to sit below it moved into the brand
+  // dropdown), so no separate footer-link height/gap to account for anymore.
   function computeScale() {
     const appStyle = getComputedStyle(appEl);
-    const mainStyle = getComputedStyle(mainEl);
     const scoreRowStyle = getComputedStyle(scoreRowEl);
     const vPad = parseFloat(appStyle.paddingTop) + parseFloat(appStyle.paddingBottom);
     const appGap = parseFloat(appStyle.gap) || 16;
-    const mainGap = parseFloat(mainStyle.gap) || 16;
     const scoreRowMargin = parseFloat(scoreRowStyle.marginTop) + parseFloat(scoreRowStyle.marginBottom);
     const chromeHeight = headerEl.offsetHeight + scoreRowEl.offsetHeight + scoreRowMargin
-      + navEl.offsetHeight + vPad + appGap * 2 + mainGap;
+      + vPad + appGap * 2;
     const availableWidth = window.innerWidth - 44; // ~ #app's horizontal padding
     const availableHeight = window.innerHeight - chromeHeight;
     const widthScale = availableWidth / NATURAL_WIDTH;
@@ -650,8 +652,15 @@
     return { x: Math.cos(rad), y: Math.sin(rad) };
   }
 
+  // Edge bars sit inside #board-wrap, which is now inside the drag system's
+  // (much bigger) hit area - stop their own pointerdown from bubbling up to
+  // it, or the drag handler would capture the pointer before the button's own
+  // click ever gets a chance to fire.
+  edgeBarsEl.addEventListener('pointerdown', (e) => e.stopPropagation());
+
   attachDragControls({
     boardEl,
+    hitAreaEl: document.getElementById('main'),
     isBlocked: () => !overlayEl.classList.contains('hidden'),
     pickDirection: nearestHexDir,
     pitchForDir: () => HEX_SIZE * Math.sqrt(3), // same for all 6 directions in a regular hex grid
@@ -668,6 +677,7 @@
   document.getElementById('restart-btn').addEventListener('click', startGame);
   document.getElementById('overlay-restart').addEventListener('click', startGame);
   attachFullscreenToggle(document.getElementById('fullscreen-btn'));
+  attachDropdownMenu(document.getElementById('brand-btn'), document.getElementById('variant-menu'));
 
   startGame();
 })();

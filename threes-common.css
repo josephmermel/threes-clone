@@ -95,12 +95,23 @@ body {
 }
 #score-value.pop { animation: scorePop 0.3s ease-out; }
 #brand {
+  position: relative;
   display: flex;
   align-items: center;
   gap: 10px;
   flex-shrink: 0;
   min-width: 0;
 }
+#brand-btn {
+  background: none;
+  border: none;
+  padding: 0;
+  margin: 0;
+  cursor: pointer;
+  display: block;
+  border-radius: 8px;
+}
+#brand-btn:active { transform: scale(0.94); }
 #brand img {
   width: 40px;
   height: 40px;
@@ -115,6 +126,33 @@ body {
   overflow: hidden;
   text-overflow: ellipsis;
 }
+/* Small popover off the brand icon, replacing the old footer link between the
+   two game variants - closed by default, shown via .open (toggled in JS). */
+#variant-menu {
+  display: none;
+  position: absolute;
+  top: calc(100% + 10px);
+  left: 0;
+  background: #ffffff;
+  border: 1px solid rgba(0,0,0,0.14);
+  border-radius: 10px;
+  box-shadow: 0 8px 24px rgba(0,0,0,0.25);
+  padding: 6px;
+  min-width: 200px;
+  z-index: 30;
+}
+#variant-menu.open { display: block; }
+#variant-menu a {
+  display: block;
+  padding: 10px 12px;
+  border-radius: 6px;
+  color: inherit;
+  text-decoration: none;
+  font-size: 14px;
+  font-weight: 600;
+  white-space: nowrap;
+}
+#variant-menu a:hover { background: rgba(0,0,0,0.06); }
 #header-actions {
   display: flex;
   align-items: center;
@@ -322,12 +360,3 @@ button.game-btn:active { transform: scale(0.96); }
   text-align: center;
   max-width: 420px;
 }
-
-#variant-nav {
-  font-size: 13px;
-}
-#variant-nav a {
-  color: inherit;
-  opacity: 0.85;
-}
-#variant-nav a:hover { opacity: 1; }

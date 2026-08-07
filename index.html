@@ -42,8 +42,13 @@
   <div id="app">
     <div id="header">
       <div id="brand">
-        <img src="icon-square.svg" width="40" height="40" alt="">
+        <button id="brand-btn" aria-haspopup="true" aria-expanded="false" aria-label="Menu">
+          <img src="icon-square.svg" width="40" height="40" alt="">
+        </button>
         <span>Threes!</span>
+        <div id="variant-menu">
+          <a href="threes-hex.html">Try the hex variant &rarr;</a>
+        </div>
       </div>
       <div id="next-tile-box">
         Next
@@ -67,7 +72,6 @@
         </div>
       </div>
       <div id="hint">Arrow keys / swipe / drag to slide tiles. 1 + 2 = 3, matching tiles combine (3+3=6, 6+6=12, ...). The rare gold-and-purple ★ wildcard matches whatever it slides into. Bonus tiles sometimes show as a group of three &mdash; the real one could be any of them.</div>
-      <div id="variant-nav"><a href="threes-hex.html">Try the hex variant &rarr;</a></div>
     </div>
   </div>
 
@@ -79,7 +83,7 @@
     currentMaxValue, randomBonusValue, boardScore,
     resolveMove, isGameOver: commonIsGameOver,
     paintTile, paintNumeral, renderNextIndicator, updatePageBackground, animateMove,
-    attachDragControls, attachFullscreenToggle,
+    attachDragControls, attachFullscreenToggle, attachDropdownMenu,
   } = ThreesCommon;
 
   const SIZE = 4;
@@ -388,6 +392,7 @@
   };
   attachDragControls({
     boardEl,
+    hitAreaEl: document.getElementById('main'),
     isBlocked: () => !overlayEl.classList.contains('hidden'),
     pickDirection: (dx, dy) => (Math.abs(dx) > Math.abs(dy) ? (dx > 0 ? 'right' : 'left') : (dy > 0 ? 'down' : 'up')),
     pitchForDir: () => CELL + GAP,
@@ -403,6 +408,7 @@
   document.getElementById('restart-btn').addEventListener('click', startGame);
   document.getElementById('overlay-restart').addEventListener('click', startGame);
   attachFullscreenToggle(document.getElementById('fullscreen-btn'));
+  attachDropdownMenu(document.getElementById('brand-btn'), document.getElementById('variant-menu'));
 
   startGame();
 })();
