@@ -157,10 +157,12 @@
   // (3) gravity - slowed way down from the other variants' snap-into-place
   // speed, so tiles visibly travel and merge, not teleport, before finally
   // (4) the new tile appears (that one stays quick - it's just arriving, not
-  // traveling far). All of #1/#3's travel goes through the same el.style.left/
-  // top + CSS transition mechanism as the other variants, just with the
-  // duration set inline per-stage (setTileTransition below) instead of relying
-  // on threes-common.css's one shared speed.
+  // traveling far). Stage 2's travel goes through the same el.style.left/top +
+  // CSS transition mechanism as the other variants, just with the duration set
+  // inline (setTileTransition below) instead of relying on threes-common.css's
+  // one shared speed. Stage 1 (rotation) *can't* use a CSS transition at all -
+  // see the tweenArc/rotatePoint comment below for why - so it's driven by a
+  // small requestAnimationFrame loop instead.
   const ROTATE_MS = 160;      // stage 1: full button/keyboard rotation
   const ROTATE_PAUSE_MS = 120; // gap between stage 1 settling and stage 2 starting
   const FALL_MS = 280;         // stage 2: gravity's travel time
@@ -171,12 +173,11 @@
   const STARTER_FILL_RATIO = 0.4;
 
   // Touch swipe drives stage 1 directly, live, instead of jumping straight to
-  // the button/keyboard's instant full turn: drag distance maps to rotation
-  // progress 1:1 (transitions off, so it tracks the finger exactly), and
-  // releasing snaps the rest of the way to a full turn or back to start,
-  // whichever is closer, before stage 2 begins.
-  const DRAG_DEADZONE = 10;        // px of slop before a direction is even chosen
-  const DRAG_FULL_DISTANCE = 140;  // px of drag that equals one full 60-degree turn
+  // the button/keyboard's instant full turn: rotation tracks the actual angle
+  // swept by the finger around the board's center (see the pointermove handler
+  // below), and releasing snaps the rest of the way to a full turn or back to
+  // start, whichever is closer, before stage 2 begins.
+  const DRAG_ANGLE_DEADZONE = 6;   // degrees of slop before a direction is even chosen
   const DRAG_COMMIT_FRACTION = 0.5;
   const DRAG_SNAP_MS = 120;        // stage 1: finishing (or undoing) a released drag
 
@@ -436,6 +437,58 @@
     el.style.animationDelay = delay + 'ms';
   }
 
+  // Stage 1 can't be a plain el.style.left/top CSS transition the way stage 2
+  // is: a transition only interpolates *linearly* between the start and end
+  // values, but two points on a circle joined by a straight line cut inside
+  // the circle - every tile would visibly bunch in toward the center mid-turn
+  // instead of sweeping around it. There's no CSS-only fix for that on a plain
+  // left/top-positioned element (no curved-path transition exists for this),
+  // so stage 1 is driven by its own requestAnimationFrame loop instead,
+  // computing a true rotation (constant radius, changing angle) every frame.
+  //
+  // Rotates point (px,py) by `deg` degrees around (cx,cy). In screen
+  // coordinates (y grows downward) a positive angle is clockwise - verified
+  // against this file's rotateCW/rotateCCW axial math, which already
+  // established that convention for the underlying grid.
+  function rotatePoint(px, py, cx, cy, deg) {
+    const rad = deg * Math.PI / 180;
+    const dx = px - cx, dy = py - cy;
+    const cos = Math.cos(rad), sin = Math.sin(rad);
+    return { x: cx + dx * cos - dy * sin, y: cy + dx * sin + dy * cos };
+  }
+
+  function easeOutCubic(t) { return 1 - Math.pow(1 - t, 3); }
+
+  // Animates every tile in `startCenters` (Map<id, {cx,cy}> - each tile's
+  // pixel *center* before this rotation) along the arc from fromDeg to toDeg
+  // around the board's center, over durationMs, then calls onDone. Used for
+  // the button/keyboard instant turn and for finishing (or undoing) a
+  // released drag - anywhere stage 1 needs to *animate* rather than track a
+  // live pointer 1:1.
+  function tweenArc(startCenters, fromDeg, toDeg, durationMs, onDone) {
+    const bcx = BOARD_W / 2, bcy = BOARD_H / 2;
+    const items = [];
+    for (const [id, { cx, cy }] of startCenters) {
+      const el = elById.get(id);
+      if (!el) continue;
+      el.style.transition = 'none';
+      items.push({ el, cx, cy });
+    }
+    const t0 = performance.now();
+    function frame() {
+      const raw = durationMs > 0 ? Math.min(1, (performance.now() - t0) / durationMs) : 1;
+      const deg = fromDeg + (toDeg - fromDeg) * easeOutCubic(raw);
+      for (const { el, cx, cy } of items) {
+        const p = rotatePoint(cx, cy, bcx, bcy, deg);
+        el.style.left = (p.x - HEX_W / 2) + 'px';
+        el.style.top = (p.y - HEX_H / 2) + 'px';
+      }
+      if (raw < 1) requestAnimationFrame(frame);
+      else if (onDone) onDone();
+    }
+    requestAnimationFrame(frame);
+  }
+
   let grid;
   let tileValue;
   let tilePos;
@@ -593,23 +646,27 @@
   }
 
   // Pure computation of what a rotation would do to the current grid: no
-  // mutation, no animation - just the resulting grid/positions plus, for every
-  // currently-placed tile, its pixel from/to for this rotation. Shared by the
-  // instant button/keyboard path and the live drag preview, since both need
-  // exactly this and only this (no fall/merge info - stage 1 is rotation only).
+  // mutation, no animation - just the resulting grid/positions, plus each
+  // currently-placed tile's pixel *center* before this rotation (what tweenArc
+  // needs to animate it along the correct arc; the "to" cell position isn't
+  // needed for that since rotating the center by exactly +-60 degrees around
+  // the board's center *is* where it ends up, by construction - no separate
+  // lookup can disagree). Shared by the instant button/keyboard path and the
+  // live drag preview.
   function computeRotation(dir) {
     const rotateFn = dir === 'CW' ? rotateCW : rotateCCW;
     const newGrid = new Map();
     const newTilePos = {};
-    const tileMotion = new Map();
+    const startCenters = new Map();
     for (const [key, id] of grid) {
       const [q, r] = parseKey(key);
       const [nq, nr] = rotateFn(q, r);
       newGrid.set(cellKey(nq, nr), id);
       newTilePos[id] = [nq, nr];
-      tileMotion.set(id, { from: cellPos(q, r), to: cellPos(nq, nr) });
+      const { left, top } = cellPos(q, r);
+      startCenters.set(id, { cx: left + HEX_W / 2, cy: top + HEX_H / 2 });
     }
-    return { newGrid, newTilePos, tileMotion };
+    return { newGrid, newTilePos, startCenters };
   }
 
   // Stage 2 (gravity + merges) and stage 3 (the new tile). Called once stage 1
@@ -692,16 +749,11 @@
     if (!overlayEl.classList.contains('hidden') || rotating || drag) return;
     rotating = true;
 
-    const { newGrid, newTilePos, tileMotion } = computeRotation(dir);
-    for (const [id, { to }] of tileMotion) {
-      const el = elById.get(id);
-      if (!el) continue;
-      setTileTransition(el, ROTATE_MS);
-      el.style.left = to.left + 'px';
-      el.style.top = to.top + 'px';
-    }
-
-    setTimeout(() => startFallPhase(newGrid, newTilePos), ROTATE_MS + ROTATE_PAUSE_MS);
+    const sign = dir === 'CW' ? 1 : -1;
+    const { newGrid, newTilePos, startCenters } = computeRotation(dir);
+    tweenArc(startCenters, 0, sign * 60, ROTATE_MS, () => {
+      setTimeout(() => startFallPhase(newGrid, newTilePos), ROTATE_PAUSE_MS);
+    });
   }
 
   applyBoardDimensions();
@@ -724,66 +776,86 @@
   rotateCwBtn.addEventListener('click', () => move('CW'));
 
   // Stage 1, live-drag path: swipe anywhere in the centered area (including
-  // the blank margin around the board) and rotation tracks the finger 1:1 -
-  // transitions off, direct position control - up to a full 60-degree turn at
-  // DRAG_FULL_DISTANCE px. Releasing snaps the rest of the way to whichever
-  // end (full turn or back to start) is on the committed side of the halfway
-  // mark, then either hands off to stage 2 (committed) or just stops
-  // (cancelled, no state change at all).
-  let drag = null; // { startX, dir, tileMotion, newGrid, newTilePos, t }
+  // the blank margin around the board), in *any* direction, not just
+  // horizontal - what matters is which way the touch point is sweeping around
+  // the board's center, exactly like actually turning a wheel by its rim.
+  // Concretely: track the angle from the board's center to the pointer, and
+  // rotate the wheel by exactly how much that angle has changed since
+  // pointerdown (clamped to +-60 degrees). This one rule reproduces every
+  // case a "grab the rim" gesture should: at the top of the circle, rightward
+  // motion is clockwise; at the bottom, leftward is; at the left edge, upward
+  // is; at the right edge, downward is - which is also exactly why a swipe
+  // starting below the board (the common case, given how much of the tap
+  // area is blank space under it) reads as "left = clockwise, right =
+  // counterclockwise" at a glance, without that being a special case.
+  //
+  // Releasing snaps the rest of the way to whichever end (full turn or back
+  // to start) is on the committed side of the halfway mark, then either hands
+  // off to stage 2 (committed) or just stops (cancelled, no state change at all).
+  let drag = null; // { center, startAngle, dir, startCenters, newGrid, newTilePos, t }
 
-  function applyDragT(t) {
-    for (const [id, { from, to }] of drag.tileMotion) {
+  function angleFromCenter(clientX, clientY, center) {
+    return Math.atan2(clientY - center.y, clientX - center.x) * 180 / Math.PI;
+  }
+
+  function applyDragAngle(deg) {
+    const bcx = BOARD_W / 2, bcy = BOARD_H / 2;
+    for (const [id, { cx, cy }] of drag.startCenters) {
       const el = elById.get(id);
       if (!el) continue;
-      el.style.left = (from.left + (to.left - from.left) * t) + 'px';
-      el.style.top = (from.top + (to.top - from.top) * t) + 'px';
+      const p = rotatePoint(cx, cy, bcx, bcy, deg);
+      el.style.left = (p.x - HEX_W / 2) + 'px';
+      el.style.top = (p.y - HEX_H / 2) + 'px';
     }
   }
 
   mainEl.addEventListener('pointerdown', (e) => {
     if (!overlayEl.classList.contains('hidden') || rotating) return;
-    drag = { startX: e.clientX, dir: null, tileMotion: null, t: 0 };
+    const rect = boardEl.getBoundingClientRect();
+    const center = { x: rect.left + rect.width / 2, y: rect.top + rect.height / 2 };
+    drag = { center, startAngle: angleFromCenter(e.clientX, e.clientY, center), dir: null, startCenters: null, t: 0 };
     mainEl.setPointerCapture(e.pointerId);
   });
 
   mainEl.addEventListener('pointermove', (e) => {
     if (!drag) return;
-    const dx = e.clientX - drag.startX;
+    const curAngle = angleFromCenter(e.clientX, e.clientY, drag.center);
+    let delta = curAngle - drag.startAngle;
+    while (delta > 180) delta -= 360;
+    while (delta <= -180) delta += 360;
+
     if (!drag.dir) {
-      if (Math.abs(dx) < DRAG_DEADZONE) return;
-      drag.dir = dx > 0 ? 'CW' : 'CCW';
-      const { newGrid, newTilePos, tileMotion } = computeRotation(drag.dir);
+      if (Math.abs(delta) < DRAG_ANGLE_DEADZONE) return;
+      drag.dir = delta > 0 ? 'CW' : 'CCW';
+      const { newGrid, newTilePos, startCenters } = computeRotation(drag.dir);
       drag.newGrid = newGrid;
       drag.newTilePos = newTilePos;
-      drag.tileMotion = tileMotion;
-      for (const el of elById.values()) el.style.transition = 'none';
+      drag.startCenters = startCenters;
+      for (const [id] of startCenters) {
+        const el = elById.get(id);
+        if (el) el.style.transition = 'none';
+      }
     }
-    drag.t = Math.max(0, Math.min(1, Math.abs(dx) / DRAG_FULL_DISTANCE));
-    applyDragT(drag.t);
+
+    const sign = drag.dir === 'CW' ? 1 : -1;
+    const progress = Math.max(0, Math.min(60, sign * delta));
+    drag.t = progress / 60;
+    applyDragAngle(sign * progress);
   });
 
   function finishDrag() {
     if (!drag) return;
-    const { tileMotion, t, newGrid, newTilePos } = drag;
+    const { dir, startCenters, t, newGrid, newTilePos } = drag;
     drag = null;
-    if (!tileMotion) return; // never left the deadzone - a tap, not a swipe
+    if (!startCenters) return; // never left the deadzone - a tap, not a swipe
 
     rotating = true;
+    const sign = dir === 'CW' ? 1 : -1;
     const committing = t >= DRAG_COMMIT_FRACTION;
-    for (const [id, pos] of tileMotion) {
-      const el = elById.get(id);
-      if (!el) continue;
-      const target = committing ? pos.to : pos.from;
-      setTileTransition(el, DRAG_SNAP_MS);
-      el.style.left = target.left + 'px';
-      el.style.top = target.top + 'px';
-    }
-    if (committing) {
-      setTimeout(() => startFallPhase(newGrid, newTilePos), DRAG_SNAP_MS + ROTATE_PAUSE_MS);
-    } else {
-      setTimeout(() => { rotating = false; }, DRAG_SNAP_MS);
-    }
+    tweenArc(startCenters, sign * 60 * t, committing ? sign * 60 : 0, DRAG_SNAP_MS, () => {
+      if (committing) setTimeout(() => startFallPhase(newGrid, newTilePos), ROTATE_PAUSE_MS);
+      else rotating = false;
+    });
   }
   mainEl.addEventListener('pointerup', finishDrag);
   mainEl.addEventListener('pointercancel', finishDrag);
