@@ -1,0 +1,675 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, minimum-scale=1.0, user-scalable=no">
+<title>Threes! Wheel</title>
+<link rel="icon" type="image/svg+xml" href="icon-wheel.svg">
+<link rel="apple-touch-icon" href="icon-wheel.svg">
+<link rel="stylesheet" href="threes-common.css">
+<style>
+  :root {
+    --board-bg: #e8e8ea;
+    --cell-bg: rgba(0,0,0,0.04);
+    --cell-border: rgba(0,0,0,0.14);
+  }
+  #board {
+    position: relative;
+    background: var(--board-bg);
+    border-radius: 16px;
+    border: 1px solid rgba(0,0,0,0.16);
+    box-shadow: 0 6px 20px rgba(0,0,0,0.22);
+  }
+  /* Flat-top hexagon with subtly rounded corners - the #hexRoundClip path below
+     is the same rounded-hex shape used by the (pointy-top) hex variant, just
+     transposed (x/y swapped), which for a shape this symmetric is exactly a
+     90-degree rotation - i.e. flat-top instead of pointy-top. That's what
+     makes the *overall* board (a hexagon of hexagons) come out vertex-down
+     instead of flat-edge-down: individual flat-top cells, hexagon-of-cells
+     vertex-down, is a 30-degree rotation of the original variant's pairing. */
+  .hex-shape {
+    clip-path: url(#hexRoundClip);
+  }
+  .cell-bg {
+    position: absolute;
+    width: 74px;
+    height: 64px;
+    background: var(--cell-bg);
+    filter: drop-shadow(0 0 1px var(--cell-border));
+  }
+  .tile {
+    width: 74px;
+    height: 64px;
+    border-radius: 0;
+    font-size: 24px;
+    border: none;
+    box-shadow: none;
+    filter: drop-shadow(0 4px 5px rgba(0,0,0,0.4)) drop-shadow(0 0 1.5px rgba(0,0,0,0.45));
+  }
+  .tile.wild {
+    border: none;
+    box-shadow: none;
+    filter: drop-shadow(0 0 6px rgba(212,175,55,0.6))
+            drop-shadow(0 2px 3px rgba(0,0,0,0.25))
+            drop-shadow(0 0 1px rgba(255,255,255,0.6));
+  }
+
+  /* Two big rotate buttons sit just outside the board's flat left/right edges
+     (siblings of #board, positioned in JS from the board's current pixel size,
+     same pattern the hex variant uses for its edge bars) - "spin the wheel"
+     left or right, rather than sliding tiles in any of 6 directions. */
+  #rotate-controls {
+    position: absolute;
+    inset: 0;
+    pointer-events: none;
+    z-index: 6;
+  }
+  .rotate-btn {
+    position: absolute;
+    padding: 0;
+    border: 1px solid rgba(0,0,0,0.16);
+    border-radius: 999px;
+    background: #f4a340;
+    color: #2f4858;
+    font-size: 26px;
+    line-height: 1;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    box-shadow: 0 3px 8px rgba(0,0,0,0.35);
+    cursor: pointer;
+    pointer-events: auto;
+  }
+  .rotate-btn:active { background: #ffb75c; transform: scale(0.94); }
+</style>
+</head>
+<body>
+  <svg width="0" height="0" style="position:absolute">
+    <defs>
+      <clipPath id="hexRoundClip" clipPathUnits="objectBoundingBox">
+        <path d="M0.035,0.43 Q0,0.5 0.035,0.57 L0.215,0.93 Q0.25,1 0.32,1 L0.68,1 Q0.75,1 0.785,0.93 L0.965,0.57 Q1,0.5 0.965,0.43 L0.785,0.07 Q0.75,0 0.68,0 L0.32,0 Q0.25,0 0.215,0.07 Z"/>
+      </clipPath>
+    </defs>
+  </svg>
+  <div id="app">
+    <div id="header">
+      <div id="brand">
+        <button id="brand-btn" aria-haspopup="true" aria-expanded="false" aria-label="Menu">
+          <img src="icon-wheel.svg" width="40" height="40" alt="">
+        </button>
+        <span>Threes! Wheel</span>
+        <div id="variant-menu">
+          <a href="index.html">&larr; Classic square game</a>
+          <a href="threes-hex.html">&larr; Hex variant</a>
+        </div>
+      </div>
+      <div id="next-tile-box">
+        Next
+        <div id="next-indicator"></div>
+      </div>
+      <div id="header-actions">
+        <button class="icon-btn" id="fullscreen-btn" title="Fullscreen" aria-label="Toggle fullscreen">⛶</button>
+        <button class="game-btn" id="restart-btn">Restart</button>
+      </div>
+    </div>
+    <div id="score-row">
+      <div id="score-label">Score</div>
+      <div id="score-value">0</div>
+    </div>
+    <div id="main">
+      <div id="board-wrap">
+        <div id="board"></div>
+        <div id="rotate-controls">
+          <button class="rotate-btn" id="rotate-ccw" aria-label="Rotate counterclockwise">&#8634;</button>
+          <button class="rotate-btn" id="rotate-cw" aria-label="Rotate clockwise">&#8635;</button>
+        </div>
+        <div id="overlay" class="hidden">
+          <div id="overlay-text">Game Over</div>
+          <button class="game-btn" id="overlay-restart">Try Again</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+<script src="threes-common.js"></script>
+<script>
+(function () {
+  const {
+    WILD, canMerge, mergeValue, partnerValue, pickRandom, cellKey, parseKey,
+    currentMaxValue, boardScore,
+    paintTile, paintNumeral, renderNextIndicator, updatePageBackground, animateMove,
+    attachFullscreenToggle, attachDropdownMenu,
+  } = ThreesCommon;
+
+  const RADIUS = 2;
+  const BASE_HEX_SIZE = 42;   // circumradius used for cell-to-cell spacing (the "pitch")
+  const BASE_HEX_RENDER = 37; // circumradius actually drawn; smaller than the pitch so a
+                              // gap shows on all 6 sides, matching the other variants' look
+  const BASE_BOARD_PAD = Math.sqrt(3) * (BASE_HEX_SIZE - BASE_HEX_RENDER);
+  let SCALE = 1, HEX_SIZE = BASE_HEX_SIZE, HEX_RENDER = BASE_HEX_RENDER, BOARD_PAD = BASE_BOARD_PAD;
+  // Flat-top cells: vertex-to-vertex (width) is 2*render, flat-to-flat (height) is
+  // sqrt(3)*render - the transpose of the pointy-top variant's HEX_W/HEX_H.
+  let HEX_W = HEX_RENDER * 2;
+  let HEX_H = HEX_RENDER * Math.sqrt(3);
+  const SLIDE_MS = 80;
+  const ROTATE_MS = 90;
+  const WINNER_FLIP_MS = 170;
+  const LOSER_FLIP_MS = SLIDE_MS + 20;
+  const WILDCARD_CHANCE = 0.05;
+  const TRIPLE_HINT_CHANCE = 0.6;
+  const STARTER_FILL_RATIO = 0.4;
+
+  const BASE_BTN_SIZE = 52;
+  const BASE_BTN_GAP = 8;
+  const BASE_EDGE_CLEARANCE = BASE_BTN_SIZE + BASE_BTN_GAP;
+
+  // --- Tile spawn distribution (same weighting as the hex variant) ---------
+  const SPAWN_CAP = 96;
+  const LOW_VALUE_BOOST = 1.8;
+  const CHAIN_DECAY = 0.55;
+  const STARTER_CAP = 6;
+
+  function maxSpawnValue(matchValue) {
+    if (matchValue < 12) return 2;
+    return Math.min(SPAWN_CAP, matchValue / 4);
+  }
+  const LOW_SLOT = Symbol('low');
+  function pickSpawnValueForCap(cap) {
+    const entries = [{ v: LOW_SLOT, w: LOW_VALUE_BOOST * 2 }];
+    for (let v = 3, i = 0; v <= cap; v *= 2, i++) entries.push({ v, w: Math.pow(CHAIN_DECAY, i + 1) });
+    const total = entries.reduce((sum, e) => sum + e.w, 0);
+    let r = Math.random() * total;
+    for (const e of entries) {
+      r -= e.w;
+      if (r < 0) return e.v === LOW_SLOT ? (Math.random() < 0.5 ? 1 : 2) : e.v;
+    }
+    return entries[entries.length - 1].v;
+  }
+  function pickSpawnValue(matchValue) {
+    return pickSpawnValueForCap(maxSpawnValue(matchValue));
+  }
+
+  const boardEl = document.getElementById('board');
+  const scoreValueEl = document.getElementById('score-value');
+  const nextIndicatorEl = document.getElementById('next-indicator');
+  const overlayEl = document.getElementById('overlay');
+  const overlayTextEl = document.getElementById('overlay-text');
+
+  // --- Board geometry (axial coords q,r) - same 19-cell hexagon-of-hexagons
+  // as the other hex variant. ---
+  const ALL_CELLS = [];
+  for (let q = -RADIUS; q <= RADIUS; q++) {
+    const r1 = Math.max(-RADIUS, -q - RADIUS), r2 = Math.min(RADIUS, -q + RADIUS);
+    for (let r = r1; r <= r2; r++) ALL_CELLS.push([q, r]);
+  }
+  const ALL_KEYS = ALL_CELLS.map(([q, r]) => cellKey(q, r));
+
+  // Every "fall" line is one column (fixed q), ordered from the bottom cell
+  // (largest r - the wall gravity pulls toward) to the top cell (smallest r -
+  // the far edge, where new tiles spawn). Fall direction never changes, unlike
+  // the swipe-any-of-6-ways hex variant, so this is built once.
+  const FALL_LINES = [];
+  {
+    const byQ = new Map();
+    for (const [q, r] of ALL_CELLS) {
+      if (!byQ.has(q)) byQ.set(q, []);
+      byQ.get(q).push(r);
+    }
+    for (const [q, rs] of byQ) {
+      rs.sort((a, b) => b - a); // descending: index 0 = max r = bottom/wall
+      FALL_LINES.push(rs.map(r => cellKey(q, r)));
+    }
+  }
+  const TOP_EDGE_KEYS = FALL_LINES.map(line => line[line.length - 1]);
+
+  // Rotating the whole wheel by 60 degrees is a fixed relabeling of axial
+  // coordinates (pure cube-coordinate rotation, so it's exact regardless of
+  // pixel orientation): CW advances q,r -> -r, q+r; CCW is its inverse.
+  function rotateCW(q, r) { return [-r, q + r]; }
+  function rotateCCW(q, r) { return [q + r, -q]; }
+
+  // Collapses one line (array of {id,value}|null, index0 = wall/bottom side)
+  // *all the way* toward the wall, merging equal/compatible tiles as they
+  // collide (2048-style full slide), rather than each tile moving at most one
+  // slot (Threes-style, what the other two variants do). A tile that resulted
+  // from a merge this pass can't merge again this same pass, same as 2048.
+  function collapseLineFull(line) {
+    const stack = [];
+    const merges = [];
+    for (const cell of line) {
+      if (!cell) continue;
+      const top = stack[stack.length - 1];
+      if (top && !top.merged && canMerge(top.value, cell.value)) {
+        const newValue = mergeValue(top.value, cell.value);
+        const winnerWasWild = top.value === WILD;
+        const loserWasWild = cell.value === WILD;
+        const revealValue = winnerWasWild ? partnerValue(cell.value)
+                           : loserWasWild ? partnerValue(top.value)
+                           : null;
+        merges.push({ winnerId: top.id, loserId: cell.id, newValue, winnerWasWild, loserWasWild, revealValue });
+        top.value = newValue;
+        top.merged = true;
+      } else {
+        stack.push({ id: cell.id, value: cell.value, merged: false });
+      }
+    }
+    const newLine = new Array(line.length).fill(null);
+    for (let i = 0; i < stack.length; i++) newLine[i] = { id: stack[i].id, value: stack[i].value };
+    let moved = false;
+    for (let i = 0; i < line.length; i++) {
+      const before = line[i], after = newLine[i];
+      if ((before ? before.id : null) !== (after ? after.id : null) ||
+          (before ? before.value : null) !== (after ? after.value : null)) { moved = true; break; }
+    }
+    return { moved, merges, newLine };
+  }
+
+  function resolveFall(grid, tileValue) {
+    let anyMoved = false;
+    const allMerges = [];
+    const newEntries = [];
+    for (const line of FALL_LINES) {
+      const slots = line.map(key => {
+        const id = grid.get(key);
+        return id ? { id, value: tileValue[id] } : null;
+      });
+      const { moved, merges, newLine } = collapseLineFull(slots);
+      if (moved) anyMoved = true;
+      allMerges.push(...merges);
+      line.forEach((key, i) => newEntries.push([key, newLine[i] ? newLine[i].id : null]));
+    }
+    return { anyMoved, allMerges, newEntries };
+  }
+
+  // Each cell's pixel top-left (for a HEX_W x HEX_H box). Flat-top pixel
+  // formula (transpose of the pointy-top one): x depends only on q (so a fixed
+  // q is a true vertical column - what makes "fall straight down" meaningful
+  // on a hex grid at all), y combines both.
+  let CELL_PIXEL = {};
+  let BOARD_W = 0, BOARD_H = 0;
+  function layoutHex() {
+    let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+    const centers = {};
+    for (const [q, r] of ALL_CELLS) {
+      const x = HEX_SIZE * 1.5 * q;
+      const y = HEX_SIZE * Math.sqrt(3) * (r + q / 2);
+      centers[cellKey(q, r)] = { x, y };
+      minX = Math.min(minX, x); maxX = Math.max(maxX, x);
+      minY = Math.min(minY, y); maxY = Math.max(maxY, y);
+    }
+    const offsetX = -minX + HEX_W / 2 + BOARD_PAD;
+    const offsetY = -minY + HEX_H / 2 + BOARD_PAD;
+    CELL_PIXEL = {};
+    for (const key in centers) {
+      CELL_PIXEL[key] = { left: centers[key].x + offsetX - HEX_W / 2, top: centers[key].y + offsetY - HEX_H / 2 };
+    }
+    BOARD_W = maxX - minX + HEX_W + BOARD_PAD * 2;
+    BOARD_H = maxY - minY + HEX_H + BOARD_PAD * 2;
+    boardEl.style.width = BOARD_W + 'px';
+    boardEl.style.height = BOARD_H + 'px';
+  }
+
+  const boardWrapEl = document.getElementById('board-wrap');
+  const rotateControlsEl = document.getElementById('rotate-controls');
+  const rotateCcwBtn = document.getElementById('rotate-ccw');
+  const rotateCwBtn = document.getElementById('rotate-cw');
+
+  // The two rotate buttons sit just outside the board's flat left/right edges,
+  // vertically centered - the wheel's only two "grips".
+  function layoutRotateControls() {
+    const size = BASE_BTN_SIZE * SCALE, gap = BASE_BTN_GAP * SCALE;
+    rotateCcwBtn.style.width = rotateCcwBtn.style.height = size + 'px';
+    rotateCwBtn.style.width = rotateCwBtn.style.height = size + 'px';
+    rotateCcwBtn.style.fontSize = (size * 0.5) + 'px';
+    rotateCwBtn.style.fontSize = (size * 0.5) + 'px';
+    rotateCcwBtn.style.left = (-(gap + size / 2)) + 'px';
+    rotateCcwBtn.style.top = (BOARD_H / 2 - size / 2) + 'px';
+    rotateCwBtn.style.left = (BOARD_W + gap - size / 2) + 'px';
+    rotateCwBtn.style.top = (BOARD_H / 2 - size / 2) + 'px';
+  }
+
+  function measureNaturalWidth() {
+    let minX = Infinity, maxX = -Infinity;
+    for (const [q] of ALL_CELLS) {
+      const x = BASE_HEX_SIZE * 1.5 * q;
+      minX = Math.min(minX, x); maxX = Math.max(maxX, x);
+    }
+    return (maxX - minX) + BASE_HEX_RENDER * 2 + BASE_BOARD_PAD * 2 + BASE_EDGE_CLEARANCE * 2;
+  }
+  function measureNaturalHeight() {
+    let minY = Infinity, maxY = -Infinity;
+    for (const [q, r] of ALL_CELLS) {
+      const y = BASE_HEX_SIZE * Math.sqrt(3) * (r + q / 2);
+      minY = Math.min(minY, y); maxY = Math.max(maxY, y);
+    }
+    return (maxY - minY) + BASE_HEX_RENDER * Math.sqrt(3) + BASE_BOARD_PAD * 2;
+  }
+  const NATURAL_WIDTH = measureNaturalWidth();
+  const NATURAL_HEIGHT = measureNaturalHeight();
+  const MAX_SCALE = 3;
+  const appEl = document.getElementById('app');
+  const headerEl = document.getElementById('header');
+  const scoreRowEl = document.getElementById('score-row');
+  const mainEl = document.getElementById('main');
+
+  function computeScale() {
+    const appStyle = getComputedStyle(appEl);
+    const scoreRowStyle = getComputedStyle(scoreRowEl);
+    const vPad = parseFloat(appStyle.paddingTop) + parseFloat(appStyle.paddingBottom);
+    const appGap = parseFloat(appStyle.gap) || 16;
+    const scoreRowMargin = parseFloat(scoreRowStyle.marginTop) + parseFloat(scoreRowStyle.marginBottom);
+    const chromeHeight = headerEl.offsetHeight + scoreRowEl.offsetHeight + scoreRowMargin + vPad + appGap * 2;
+    const availableWidth = window.innerWidth - 44;
+    const availableHeight = window.innerHeight - chromeHeight;
+    const widthScale = availableWidth / NATURAL_WIDTH;
+    const heightScale = availableHeight / NATURAL_HEIGHT;
+    return Math.max(0.4, Math.min(widthScale, heightScale, MAX_SCALE));
+  }
+
+  function applyBoardDimensions() {
+    SCALE = computeScale();
+    HEX_SIZE = BASE_HEX_SIZE * SCALE;
+    HEX_RENDER = BASE_HEX_RENDER * SCALE;
+    HEX_W = HEX_RENDER * 2;
+    HEX_H = HEX_RENDER * Math.sqrt(3);
+    BOARD_PAD = BASE_BOARD_PAD * SCALE;
+    layoutHex();
+    boardWrapEl.style.margin = `0 ${BASE_EDGE_CLEARANCE * SCALE}px`;
+    layoutRotateControls();
+  }
+
+  function cellPos(q, r) {
+    return CELL_PIXEL[cellKey(q, r)];
+  }
+
+  let grid;
+  let tileValue;
+  let tilePos;
+  let elById;
+  let idCounter;
+  let nextValue;
+  let recordMax;
+  let highestMatchValue;
+  let rotating = false;
+
+  function drawStarterValue() {
+    return pickSpawnValueForCap(STARTER_CAP);
+  }
+  function drawNextValue() {
+    if (Math.random() < WILDCARD_CHANCE) return WILD;
+    return pickSpawnValue(highestMatchValue);
+  }
+
+  function emptyKeys() {
+    return ALL_KEYS.filter(k => !grid.get(k));
+  }
+  function placeRandomTile(value) {
+    const cells = emptyKeys();
+    if (!cells.length) return null;
+    const key = pickRandom(cells);
+    const [q, r] = parseKey(key);
+    const id = idCounter++;
+    grid.set(key, id);
+    tileValue[id] = value;
+    tilePos[id] = [q, r];
+    return id;
+  }
+
+  // With only 2 possible moves (rotate CW or CCW), the generic "board full and
+  // no adjacent mergeable pair anywhere" check the other variants use is too
+  // loose here: a full board can easily have a mergeable pair sitting
+  // somewhere in the raw hex-adjacency sense that these two specific moves can
+  // *never* actually bring together (confirmed empirically - alternating
+  // rotations can spin in place on a full board indefinitely with zero
+  // merges, while that check kept reporting "not over"). The real question is
+  // simpler and cheaper to answer directly: does *this* rotation, followed by
+  // its fall, produce any merge at all? If neither direction does, and the
+  // board is full, there is no move left that changes anything.
+  function wouldMergeIfRotated(dir) {
+    const rotateFn = dir === 'CW' ? rotateCW : rotateCCW;
+    const testGrid = new Map();
+    for (const [key, id] of grid) {
+      const [q, r] = parseKey(key);
+      const [nq, nr] = rotateFn(q, r);
+      testGrid.set(cellKey(nq, nr), id);
+    }
+    return resolveFall(testGrid, tileValue).allMerges.length > 0;
+  }
+  function isWheelGameOver() {
+    return emptyKeys().length === 0 && !wouldMergeIfRotated('CW') && !wouldMergeIfRotated('CCW');
+  }
+
+  function scaleFont(el) {
+    el.style.fontSize = (parseFloat(el.style.fontSize) * SCALE) + 'px';
+  }
+  function paintTileScaled(el, value) { paintTile(el, value); scaleFont(el); }
+  function paintNumeralScaled(el, value) { paintNumeral(el, value); scaleFont(el); }
+
+  function makeTileEl(value, q, r, spawning) {
+    const el = document.createElement('div');
+    el.className = 'tile hex-shape' + (spawning ? ' spawning' : '');
+    paintTileScaled(el, value);
+    el.style.width = HEX_W + 'px';
+    el.style.height = HEX_H + 'px';
+    const { left, top } = cellPos(q, r);
+    el.style.left = left + 'px';
+    el.style.top = top + 'px';
+    return el;
+  }
+
+  let cellBgEls = [];
+  function relayoutAll() {
+    for (const { el, q, r } of cellBgEls) {
+      el.style.width = HEX_W + 'px';
+      el.style.height = HEX_H + 'px';
+      const { left, top } = cellPos(q, r);
+      el.style.left = left + 'px';
+      el.style.top = top + 'px';
+    }
+    if (!elById) return;
+    for (const [id, el] of elById) {
+      el.style.width = HEX_W + 'px';
+      el.style.height = HEX_H + 'px';
+      paintTileScaled(el, tileValue[id]);
+      const [q, r] = tilePos[id];
+      const { left, top } = cellPos(q, r);
+      el.style.left = left + 'px';
+      el.style.top = top + 'px';
+    }
+  }
+
+  function updateScoreDisplay(animatePop) {
+    const newScore = boardScore(tileValue).toLocaleString();
+    if (newScore === scoreValueEl.textContent) return;
+    scoreValueEl.textContent = newScore;
+    if (animatePop) {
+      scoreValueEl.classList.remove('pop');
+      void scoreValueEl.offsetWidth;
+      scoreValueEl.classList.add('pop');
+    }
+  }
+
+  function startGame() {
+    grid = new Map();
+    tileValue = {};
+    tilePos = {};
+    elById = new Map();
+    idCounter = 1;
+    rotating = false;
+
+    boardEl.innerHTML = '';
+    cellBgEls = [];
+    for (const [q, r] of ALL_CELLS) {
+      const bg = document.createElement('div');
+      bg.className = 'cell-bg hex-shape';
+      bg.style.width = HEX_W + 'px';
+      bg.style.height = HEX_H + 'px';
+      const { left, top } = cellPos(q, r);
+      bg.style.left = left + 'px';
+      bg.style.top = top + 'px';
+      boardEl.appendChild(bg);
+      cellBgEls.push({ el: bg, q, r });
+    }
+
+    const starterIds = [];
+    const starterCount = Math.round(ALL_CELLS.length * STARTER_FILL_RATIO);
+    for (let i = 0; i < starterCount; i++) {
+      const id = placeRandomTile(drawStarterValue());
+      if (id) starterIds.push(id);
+    }
+    for (const id of starterIds) {
+      const [q, r] = tilePos[id];
+      const el = makeTileEl(tileValue[id], q, r, true);
+      boardEl.appendChild(el);
+      elById.set(id, el);
+    }
+    recordMax = currentMaxValue(tileValue);
+    highestMatchValue = 0;
+
+    nextValue = drawNextValue();
+    renderNextIndicator(nextIndicatorEl, nextValue, TRIPLE_HINT_CHANCE);
+    updatePageBackground(highestMatchValue);
+    updateScoreDisplay(false);
+    overlayEl.classList.add('hidden');
+  }
+
+  // A move here is two phases: (1) rotate every tile's position 60 degrees
+  // around the board's center - a pure relabeling, no merges - animated as a
+  // slide to the new spot; then (2), once that settles, gravity pulls
+  // everything down each column as far as it'll go, merging along the way
+  // (2048-style), same shared animateMove the other variants use for that part.
+  function move(dir) {
+    if (!overlayEl.classList.contains('hidden')) return;
+    if (rotating) return;
+    rotating = true;
+
+    const rotateFn = dir === 'CW' ? rotateCW : rotateCCW;
+    const newGrid = new Map();
+    const newTilePos = {};
+    for (const [key, id] of grid) {
+      const [q, r] = parseKey(key);
+      const [nq, nr] = rotateFn(q, r);
+      newGrid.set(cellKey(nq, nr), id);
+      newTilePos[id] = [nq, nr];
+    }
+
+    for (const [id, el] of elById) {
+      const pos = newTilePos[id];
+      if (!pos) continue;
+      const { left, top } = cellPos(pos[0], pos[1]);
+      el.style.left = left + 'px';
+      el.style.top = top + 'px';
+    }
+
+    setTimeout(() => {
+      grid = newGrid;
+      tilePos = newTilePos;
+
+      const fallResult = resolveFall(grid, tileValue);
+      for (const { winnerId, loserId, newValue } of fallResult.allMerges) {
+        tileValue[winnerId] = newValue;
+        delete tileValue[loserId];
+        if (newValue > highestMatchValue) highestMatchValue = newValue;
+      }
+      grid = new Map(fallResult.newEntries.filter(([, id]) => id != null));
+      const settledTilePos = {};
+      for (const [key, id] of grid) settledTilePos[id] = parseKey(key);
+      const loserFinalPos = {};
+      for (const { winnerId, loserId } of fallResult.allMerges) loserFinalPos[loserId] = settledTilePos[winnerId];
+      tilePos = settledTilePos;
+
+      const openTopCells = TOP_EDGE_KEYS.filter(k => !grid.get(k));
+      const spawnCells = openTopCells.length > 0 ? openTopCells : emptyKeys();
+      let spawnedId = null, spawnEnterFrom = null;
+      if (spawnCells.length > 0) {
+        const key = pickRandom(spawnCells);
+        const [q, r] = parseKey(key);
+        const id = idCounter++;
+        grid.set(key, id);
+        tileValue[id] = nextValue;
+        tilePos[id] = [q, r];
+        spawnedId = id;
+        nextValue = drawNextValue();
+        const finalPos = cellPos(q, r);
+        const pitch = HEX_SIZE * Math.sqrt(3); // one hex step, straight up (opposite the fall)
+        spawnEnterFrom = { left: finalPos.left, top: finalPos.top - pitch };
+      }
+
+      let milestoneIds = null;
+      const newMax = currentMaxValue(tileValue);
+      if (newMax > recordMax) {
+        milestoneIds = new Set(fallResult.allMerges.filter(m => m.newValue === newMax).map(m => m.winnerId));
+        recordMax = newMax;
+      }
+
+      animateMove({
+        elById, tileValue, tilePos, allMerges: fallResult.allMerges, loserFinalPos, spawnedId,
+        boardEl, cellPos, createTileEl: makeTileEl, milestoneIds, spawnEnterFrom,
+        slideMs: SLIDE_MS, winnerFlipMs: WINNER_FLIP_MS, loserFlipMs: LOSER_FLIP_MS,
+        paintTile: paintTileScaled, paintNumeral: paintNumeralScaled,
+      });
+      renderNextIndicator(nextIndicatorEl, nextValue, TRIPLE_HINT_CHANCE);
+      updatePageBackground(highestMatchValue);
+      updateScoreDisplay(true);
+
+      const settleMs = (fallResult.allMerges.length > 0 ? SLIDE_MS + WINNER_FLIP_MS : SLIDE_MS) + 30;
+      setTimeout(() => {
+        rotating = false;
+        if (isWheelGameOver()) {
+          overlayTextEl.textContent = 'Game Over';
+          overlayEl.classList.remove('hidden');
+        }
+      }, settleMs);
+    }, ROTATE_MS);
+  }
+
+  applyBoardDimensions();
+  let resizeTimer = null;
+  window.addEventListener('resize', () => {
+    clearTimeout(resizeTimer);
+    resizeTimer = setTimeout(() => {
+      applyBoardDimensions();
+      relayoutAll();
+    }, 120);
+  });
+
+  window.addEventListener('keydown', (e) => {
+    if (e.key === 'ArrowLeft') { e.preventDefault(); move('CCW'); }
+    else if (e.key === 'ArrowRight') { e.preventDefault(); move('CW'); }
+  });
+
+  rotateControlsEl.addEventListener('pointerdown', (e) => e.stopPropagation());
+  rotateCcwBtn.addEventListener('click', () => move('CCW'));
+  rotateCwBtn.addEventListener('click', () => move('CW'));
+
+  // Simple swipe-to-rotate on the whole centered area (including the blank
+  // margin around the board): drag far enough horizontally and release to
+  // spin that way. No live drag preview (unlike the other variants) - a
+  // two-phase rotate-then-fall doesn't lend itself to a partial-progress
+  // preview the way a single slide does.
+  const ROTATE_DRAG_THRESHOLD = 40;
+  let dragStartX = null;
+  mainEl.addEventListener('pointerdown', (e) => {
+    if (!overlayEl.classList.contains('hidden')) return;
+    dragStartX = e.clientX;
+    mainEl.setPointerCapture(e.pointerId);
+  });
+  mainEl.addEventListener('pointerup', (e) => {
+    if (dragStartX == null) return;
+    const dx = e.clientX - dragStartX;
+    dragStartX = null;
+    if (dx > ROTATE_DRAG_THRESHOLD) move('CW');
+    else if (dx < -ROTATE_DRAG_THRESHOLD) move('CCW');
+  });
+  mainEl.addEventListener('pointercancel', () => { dragStartX = null; });
+
+  document.getElementById('restart-btn').addEventListener('click', startGame);
+  document.getElementById('overlay-restart').addEventListener('click', startGame);
+  attachFullscreenToggle(document.getElementById('fullscreen-btn'));
+  attachDropdownMenu(document.getElementById('brand-btn'), document.getElementById('variant-menu'));
+
+  startGame();
+})();
+</script>
+</body>
+</html>
