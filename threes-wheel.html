@@ -181,9 +181,18 @@
   const DRAG_COMMIT_FRACTION = 0.5;
   const DRAG_SNAP_MS = 120;        // stage 1: finishing (or undoing) a released drag
 
+  // A touch-capable device can already rotate the wheel by swiping, so the
+  // buttons (mainly useful as a discoverable, precise click target for
+  // mouse/keyboard use) just add clutter there - detect touch once up front
+  // and skip reserving any room for them at all when it's present, same as
+  // the hex variant does for its edge bars.
+  const HAS_TOUCH = ('ontouchstart' in window) || navigator.maxTouchPoints > 0;
   const BASE_BTN_SIZE = 52;
   const BASE_BTN_GAP = 8;
-  const BASE_EDGE_CLEARANCE = BASE_BTN_SIZE + BASE_BTN_GAP;
+  // Sit in their own row under the board now, not beside it, so the board can
+  // use nearly the full available width instead of losing a button's worth of
+  // margin on both sides.
+  const BASE_BOTTOM_CLEARANCE = HAS_TOUCH ? 0 : (BASE_BTN_SIZE + BASE_BTN_GAP);
 
   // --- Tile spawn distribution (same weighting as the hex variant) ---------
   const SPAWN_CAP = 96;
@@ -335,19 +344,25 @@
   const rotateControlsEl = document.getElementById('rotate-controls');
   const rotateCcwBtn = document.getElementById('rotate-ccw');
   const rotateCwBtn = document.getElementById('rotate-cw');
+  if (HAS_TOUCH) rotateControlsEl.style.display = 'none';
 
-  // The two rotate buttons sit just outside the board's flat left/right edges,
-  // vertically centered - the wheel's only two "grips".
+  // The two rotate buttons sit in a row centered under the board - the
+  // wheel's only two "grips" for anyone without touch. Skipped entirely (no
+  // work, no reserved space) when touch is available.
   function layoutRotateControls() {
+    if (HAS_TOUCH) return;
     const size = BASE_BTN_SIZE * SCALE, gap = BASE_BTN_GAP * SCALE;
     rotateCcwBtn.style.width = rotateCcwBtn.style.height = size + 'px';
     rotateCwBtn.style.width = rotateCwBtn.style.height = size + 'px';
     rotateCcwBtn.style.fontSize = (size * 0.5) + 'px';
     rotateCwBtn.style.fontSize = (size * 0.5) + 'px';
-    rotateCcwBtn.style.left = (-(gap + size / 2)) + 'px';
-    rotateCcwBtn.style.top = (BOARD_H / 2 - size / 2) + 'px';
-    rotateCwBtn.style.left = (BOARD_W + gap - size / 2) + 'px';
-    rotateCwBtn.style.top = (BOARD_H / 2 - size / 2) + 'px';
+    const rowTop = BOARD_H + gap;
+    const totalWidth = size * 2 + gap;
+    const leftX = BOARD_W / 2 - totalWidth / 2;
+    rotateCcwBtn.style.left = leftX + 'px';
+    rotateCcwBtn.style.top = rowTop + 'px';
+    rotateCwBtn.style.left = (leftX + size + gap) + 'px';
+    rotateCwBtn.style.top = rowTop + 'px';
   }
 
   function measureNaturalWidth() {
@@ -356,7 +371,7 @@
       const x = BASE_HEX_SIZE * 1.5 * q;
       minX = Math.min(minX, x); maxX = Math.max(maxX, x);
     }
-    return (maxX - minX) + BASE_HEX_RENDER * 2 + BASE_BOARD_PAD * 2 + BASE_EDGE_CLEARANCE * 2;
+    return (maxX - minX) + BASE_HEX_RENDER * 2 + BASE_BOARD_PAD * 2;
   }
   function measureNaturalHeight() {
     let minY = Infinity, maxY = -Infinity;
@@ -364,7 +379,7 @@
       const y = BASE_HEX_SIZE * Math.sqrt(3) * (r + q / 2);
       minY = Math.min(minY, y); maxY = Math.max(maxY, y);
     }
-    return (maxY - minY) + BASE_HEX_RENDER * Math.sqrt(3) + BASE_BOARD_PAD * 2;
+    return (maxY - minY) + BASE_HEX_RENDER * Math.sqrt(3) + BASE_BOARD_PAD * 2 + BASE_BOTTOM_CLEARANCE;
   }
   const NATURAL_WIDTH = measureNaturalWidth();
   const NATURAL_HEIGHT = measureNaturalHeight();
@@ -396,7 +411,7 @@
     HEX_H = HEX_RENDER * Math.sqrt(3);
     BOARD_PAD = BASE_BOARD_PAD * SCALE;
     layoutHex();
-    boardWrapEl.style.margin = `0 ${BASE_EDGE_CLEARANCE * SCALE}px`;
+    boardWrapEl.style.margin = `0 0 ${BASE_BOTTOM_CLEARANCE * SCALE}px 0`;
     layoutRotateControls();
   }
 
