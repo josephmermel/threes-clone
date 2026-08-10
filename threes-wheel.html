@@ -151,13 +151,34 @@
   // sqrt(3)*render - the transpose of the pointy-top variant's HEX_W/HEX_H.
   let HEX_W = HEX_RENDER * 2;
   let HEX_H = HEX_RENDER * Math.sqrt(3);
-  const SLIDE_MS = 80;
-  const ROTATE_MS = 90;
-  const WINNER_FLIP_MS = 170;
-  const LOSER_FLIP_MS = SLIDE_MS + 20;
+  // Three distinct, deliberately-paced stages rather than one blur: (1) rotate
+  // the wheel - snappy, since it's directly driven by the button/key/swipe;
+  // (2) a small beat of stillness so the eye registers "the spin is done";
+  // (3) gravity - slowed way down from the other variants' snap-into-place
+  // speed, so tiles visibly travel and merge, not teleport, before finally
+  // (4) the new tile appears (that one stays quick - it's just arriving, not
+  // traveling far). All of #1/#3's travel goes through the same el.style.left/
+  // top + CSS transition mechanism as the other variants, just with the
+  // duration set inline per-stage (setTileTransition below) instead of relying
+  // on threes-common.css's one shared speed.
+  const ROTATE_MS = 160;      // stage 1: full button/keyboard rotation
+  const ROTATE_PAUSE_MS = 120; // gap between stage 1 settling and stage 2 starting
+  const FALL_MS = 280;         // stage 2: gravity's travel time
+  const WINNER_FLIP_MS = 220;  // stage 2: a merge winner's pop/flip, once it lands
+  const LOSER_FLIP_MS = FALL_MS + 20;
   const WILDCARD_CHANCE = 0.05;
   const TRIPLE_HINT_CHANCE = 0.6;
   const STARTER_FILL_RATIO = 0.4;
+
+  // Touch swipe drives stage 1 directly, live, instead of jumping straight to
+  // the button/keyboard's instant full turn: drag distance maps to rotation
+  // progress 1:1 (transitions off, so it tracks the finger exactly), and
+  // releasing snaps the rest of the way to a full turn or back to start,
+  // whichever is closer, before stage 2 begins.
+  const DRAG_DEADZONE = 10;        // px of slop before a direction is even chosen
+  const DRAG_FULL_DISTANCE = 140;  // px of drag that equals one full 60-degree turn
+  const DRAG_COMMIT_FRACTION = 0.5;
+  const DRAG_SNAP_MS = 120;        // stage 1: finishing (or undoing) a released drag
 
   const BASE_BTN_SIZE = 52;
   const BASE_BTN_GAP = 8;
@@ -382,6 +403,16 @@
     return CELL_PIXEL[cellKey(q, r)];
   }
 
+  // Overrides threes-common.css's one shared left/top transition speed with an
+  // exact per-call duration (inline styles win over the stylesheet), so each
+  // stage's travel can be timed independently. animateMove (shared with the
+  // other variants) has no duration parameter of its own - it just writes
+  // style.left/top - so setting this right before calling it is what actually
+  // controls stage 2's pace.
+  function setTileTransition(el, ms) {
+    el.style.transition = `left ${ms}ms cubic-bezier(.32,.72,.35,1), top ${ms}ms cubic-bezier(.32,.72,.35,1), opacity 0.08s ease, transform 0.08s ease`;
+  }
+
   let grid;
   let tileValue;
   let tilePos;
@@ -533,94 +564,113 @@
     overlayEl.classList.add('hidden');
   }
 
-  // A move here is two phases: (1) rotate every tile's position 60 degrees
-  // around the board's center - a pure relabeling, no merges - animated as a
-  // slide to the new spot; then (2), once that settles, gravity pulls
-  // everything down each column as far as it'll go, merging along the way
-  // (2048-style), same shared animateMove the other variants use for that part.
-  function move(dir) {
-    if (!overlayEl.classList.contains('hidden')) return;
-    if (rotating) return;
-    rotating = true;
-
+  // Pure computation of what a rotation would do to the current grid: no
+  // mutation, no animation - just the resulting grid/positions plus, for every
+  // currently-placed tile, its pixel from/to for this rotation. Shared by the
+  // instant button/keyboard path and the live drag preview, since both need
+  // exactly this and only this (no fall/merge info - stage 1 is rotation only).
+  function computeRotation(dir) {
     const rotateFn = dir === 'CW' ? rotateCW : rotateCCW;
     const newGrid = new Map();
     const newTilePos = {};
+    const tileMotion = new Map();
     for (const [key, id] of grid) {
       const [q, r] = parseKey(key);
       const [nq, nr] = rotateFn(q, r);
       newGrid.set(cellKey(nq, nr), id);
       newTilePos[id] = [nq, nr];
+      tileMotion.set(id, { from: cellPos(q, r), to: cellPos(nq, nr) });
+    }
+    return { newGrid, newTilePos, tileMotion };
+  }
+
+  // Stage 2 (gravity + merges) and stage 3 (the new tile). Called once stage 1
+  // (rotation) has fully settled, from a fixed pause after it, regardless of
+  // whether that rotation was an instant button/key press or a released drag.
+  function startFallPhase(newGrid, newTilePos) {
+    grid = newGrid;
+    tilePos = newTilePos;
+
+    const fallResult = resolveFall(grid, tileValue);
+    for (const { winnerId, loserId, newValue } of fallResult.allMerges) {
+      tileValue[winnerId] = newValue;
+      delete tileValue[loserId];
+      if (newValue > highestMatchValue) highestMatchValue = newValue;
+    }
+    grid = new Map(fallResult.newEntries.filter(([, id]) => id != null));
+    const settledTilePos = {};
+    for (const [key, id] of grid) settledTilePos[id] = parseKey(key);
+    const loserFinalPos = {};
+    for (const { winnerId, loserId } of fallResult.allMerges) loserFinalPos[loserId] = settledTilePos[winnerId];
+    tilePos = settledTilePos;
+
+    const openTopCells = TOP_EDGE_KEYS.filter(k => !grid.get(k));
+    const spawnCells = openTopCells.length > 0 ? openTopCells : emptyKeys();
+    let spawnedId = null, spawnEnterFrom = null;
+    if (spawnCells.length > 0) {
+      const key = pickRandom(spawnCells);
+      const [q, r] = parseKey(key);
+      const id = idCounter++;
+      grid.set(key, id);
+      tileValue[id] = nextValue;
+      tilePos[id] = [q, r];
+      spawnedId = id;
+      nextValue = drawNextValue();
+      const finalPos = cellPos(q, r);
+      const pitch = HEX_SIZE * Math.sqrt(3); // one hex step, straight up (opposite the fall)
+      spawnEnterFrom = { left: finalPos.left, top: finalPos.top - pitch };
     }
 
-    for (const [id, el] of elById) {
-      const pos = newTilePos[id];
-      if (!pos) continue;
-      const { left, top } = cellPos(pos[0], pos[1]);
-      el.style.left = left + 'px';
-      el.style.top = top + 'px';
+    let milestoneIds = null;
+    const newMax = currentMaxValue(tileValue);
+    if (newMax > recordMax) {
+      milestoneIds = new Set(fallResult.allMerges.filter(m => m.newValue === newMax).map(m => m.winnerId));
+      recordMax = newMax;
     }
 
+    // Stage 2's travel speed: applied to every tile currently on the board
+    // (not the not-yet-created spawn) right before animateMove moves any of
+    // them, since it has no duration knob of its own - see setTileTransition.
+    for (const el of elById.values()) setTileTransition(el, FALL_MS);
+
+    animateMove({
+      elById, tileValue, tilePos, allMerges: fallResult.allMerges, loserFinalPos, spawnedId,
+      boardEl, cellPos, createTileEl: makeTileEl, milestoneIds, spawnEnterFrom,
+      slideMs: FALL_MS, winnerFlipMs: WINNER_FLIP_MS, loserFlipMs: LOSER_FLIP_MS,
+      paintTile: paintTileScaled, paintNumeral: paintNumeralScaled,
+    });
+    renderNextIndicator(nextIndicatorEl, nextValue, TRIPLE_HINT_CHANCE);
+    updatePageBackground(highestMatchValue);
+    updateScoreDisplay(true);
+
+    const settleMs = (fallResult.allMerges.length > 0 ? FALL_MS + WINNER_FLIP_MS : FALL_MS) + 30;
     setTimeout(() => {
-      grid = newGrid;
-      tilePos = newTilePos;
-
-      const fallResult = resolveFall(grid, tileValue);
-      for (const { winnerId, loserId, newValue } of fallResult.allMerges) {
-        tileValue[winnerId] = newValue;
-        delete tileValue[loserId];
-        if (newValue > highestMatchValue) highestMatchValue = newValue;
+      rotating = false;
+      if (isWheelGameOver()) {
+        overlayTextEl.textContent = 'Game Over';
+        overlayEl.classList.remove('hidden');
       }
-      grid = new Map(fallResult.newEntries.filter(([, id]) => id != null));
-      const settledTilePos = {};
-      for (const [key, id] of grid) settledTilePos[id] = parseKey(key);
-      const loserFinalPos = {};
-      for (const { winnerId, loserId } of fallResult.allMerges) loserFinalPos[loserId] = settledTilePos[winnerId];
-      tilePos = settledTilePos;
+    }, settleMs);
+  }
 
-      const openTopCells = TOP_EDGE_KEYS.filter(k => !grid.get(k));
-      const spawnCells = openTopCells.length > 0 ? openTopCells : emptyKeys();
-      let spawnedId = null, spawnEnterFrom = null;
-      if (spawnCells.length > 0) {
-        const key = pickRandom(spawnCells);
-        const [q, r] = parseKey(key);
-        const id = idCounter++;
-        grid.set(key, id);
-        tileValue[id] = nextValue;
-        tilePos[id] = [q, r];
-        spawnedId = id;
-        nextValue = drawNextValue();
-        const finalPos = cellPos(q, r);
-        const pitch = HEX_SIZE * Math.sqrt(3); // one hex step, straight up (opposite the fall)
-        spawnEnterFrom = { left: finalPos.left, top: finalPos.top - pitch };
-      }
+  // Stage 1, instant path (button click or keyboard): animate the full 60
+  // degrees at ROTATE_MS, then - after the small settling pause - hand off to
+  // stage 2. The drag path below does the equivalent but lets the player
+  // control progress through stage 1 directly instead of jumping straight to done.
+  function move(dir) {
+    if (!overlayEl.classList.contains('hidden') || rotating || drag) return;
+    rotating = true;
 
-      let milestoneIds = null;
-      const newMax = currentMaxValue(tileValue);
-      if (newMax > recordMax) {
-        milestoneIds = new Set(fallResult.allMerges.filter(m => m.newValue === newMax).map(m => m.winnerId));
-        recordMax = newMax;
-      }
+    const { newGrid, newTilePos, tileMotion } = computeRotation(dir);
+    for (const [id, { to }] of tileMotion) {
+      const el = elById.get(id);
+      if (!el) continue;
+      setTileTransition(el, ROTATE_MS);
+      el.style.left = to.left + 'px';
+      el.style.top = to.top + 'px';
+    }
 
-      animateMove({
-        elById, tileValue, tilePos, allMerges: fallResult.allMerges, loserFinalPos, spawnedId,
-        boardEl, cellPos, createTileEl: makeTileEl, milestoneIds, spawnEnterFrom,
-        slideMs: SLIDE_MS, winnerFlipMs: WINNER_FLIP_MS, loserFlipMs: LOSER_FLIP_MS,
-        paintTile: paintTileScaled, paintNumeral: paintNumeralScaled,
-      });
-      renderNextIndicator(nextIndicatorEl, nextValue, TRIPLE_HINT_CHANCE);
-      updatePageBackground(highestMatchValue);
-      updateScoreDisplay(true);
-
-      const settleMs = (fallResult.allMerges.length > 0 ? SLIDE_MS + WINNER_FLIP_MS : SLIDE_MS) + 30;
-      setTimeout(() => {
-        rotating = false;
-        if (isWheelGameOver()) {
-          overlayTextEl.textContent = 'Game Over';
-          overlayEl.classList.remove('hidden');
-        }
-      }, settleMs);
-    }, ROTATE_MS);
+    setTimeout(() => startFallPhase(newGrid, newTilePos), ROTATE_MS + ROTATE_PAUSE_MS);
   }
 
   applyBoardDimensions();
@@ -642,26 +692,70 @@
   rotateCcwBtn.addEventListener('click', () => move('CCW'));
   rotateCwBtn.addEventListener('click', () => move('CW'));
 
-  // Simple swipe-to-rotate on the whole centered area (including the blank
-  // margin around the board): drag far enough horizontally and release to
-  // spin that way. No live drag preview (unlike the other variants) - a
-  // two-phase rotate-then-fall doesn't lend itself to a partial-progress
-  // preview the way a single slide does.
-  const ROTATE_DRAG_THRESHOLD = 40;
-  let dragStartX = null;
+  // Stage 1, live-drag path: swipe anywhere in the centered area (including
+  // the blank margin around the board) and rotation tracks the finger 1:1 -
+  // transitions off, direct position control - up to a full 60-degree turn at
+  // DRAG_FULL_DISTANCE px. Releasing snaps the rest of the way to whichever
+  // end (full turn or back to start) is on the committed side of the halfway
+  // mark, then either hands off to stage 2 (committed) or just stops
+  // (cancelled, no state change at all).
+  let drag = null; // { startX, dir, tileMotion, newGrid, newTilePos, t }
+
+  function applyDragT(t) {
+    for (const [id, { from, to }] of drag.tileMotion) {
+      const el = elById.get(id);
+      if (!el) continue;
+      el.style.left = (from.left + (to.left - from.left) * t) + 'px';
+      el.style.top = (from.top + (to.top - from.top) * t) + 'px';
+    }
+  }
+
   mainEl.addEventListener('pointerdown', (e) => {
-    if (!overlayEl.classList.contains('hidden')) return;
-    dragStartX = e.clientX;
+    if (!overlayEl.classList.contains('hidden') || rotating) return;
+    drag = { startX: e.clientX, dir: null, tileMotion: null, t: 0 };
     mainEl.setPointerCapture(e.pointerId);
   });
-  mainEl.addEventListener('pointerup', (e) => {
-    if (dragStartX == null) return;
-    const dx = e.clientX - dragStartX;
-    dragStartX = null;
-    if (dx > ROTATE_DRAG_THRESHOLD) move('CW');
-    else if (dx < -ROTATE_DRAG_THRESHOLD) move('CCW');
+
+  mainEl.addEventListener('pointermove', (e) => {
+    if (!drag) return;
+    const dx = e.clientX - drag.startX;
+    if (!drag.dir) {
+      if (Math.abs(dx) < DRAG_DEADZONE) return;
+      drag.dir = dx > 0 ? 'CW' : 'CCW';
+      const { newGrid, newTilePos, tileMotion } = computeRotation(drag.dir);
+      drag.newGrid = newGrid;
+      drag.newTilePos = newTilePos;
+      drag.tileMotion = tileMotion;
+      for (const el of elById.values()) el.style.transition = 'none';
+    }
+    drag.t = Math.max(0, Math.min(1, Math.abs(dx) / DRAG_FULL_DISTANCE));
+    applyDragT(drag.t);
   });
-  mainEl.addEventListener('pointercancel', () => { dragStartX = null; });
+
+  function finishDrag() {
+    if (!drag) return;
+    const { tileMotion, t, newGrid, newTilePos } = drag;
+    drag = null;
+    if (!tileMotion) return; // never left the deadzone - a tap, not a swipe
+
+    rotating = true;
+    const committing = t >= DRAG_COMMIT_FRACTION;
+    for (const [id, pos] of tileMotion) {
+      const el = elById.get(id);
+      if (!el) continue;
+      const target = committing ? pos.to : pos.from;
+      setTileTransition(el, DRAG_SNAP_MS);
+      el.style.left = target.left + 'px';
+      el.style.top = target.top + 'px';
+    }
+    if (committing) {
+      setTimeout(() => startFallPhase(newGrid, newTilePos), DRAG_SNAP_MS + ROTATE_PAUSE_MS);
+    } else {
+      setTimeout(() => { rotating = false; }, DRAG_SNAP_MS);
+    }
+  }
+  mainEl.addEventListener('pointerup', finishDrag);
+  mainEl.addEventListener('pointercancel', finishDrag);
 
   document.getElementById('restart-btn').addEventListener('click', startGame);
   document.getElementById('overlay-restart').addEventListener('click', startGame);
