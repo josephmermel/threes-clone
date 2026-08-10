@@ -178,6 +178,7 @@
   // below), and releasing snaps the rest of the way to a full turn or back to
   // start, whichever is closer, before stage 2 begins.
   const DRAG_ANGLE_DEADZONE = 6;   // degrees of slop before a direction is even chosen
+  const DRAG_SENSITIVITY = 1.6;    // rotation progress moves this many degrees per degree swept
   const DRAG_COMMIT_FRACTION = 0.5;
   const DRAG_SNAP_MS = 120;        // stage 1: finishing (or undoing) a released drag
 
@@ -878,7 +879,7 @@
 
     if (!drag.startCenters) return; // board was busy when the deadzone was crossed
     const sign = drag.dir === 'CW' ? 1 : -1;
-    const progress = Math.max(0, Math.min(60, sign * delta));
+    const progress = Math.max(0, Math.min(60, sign * delta * DRAG_SENSITIVITY));
     drag.t = progress / 60;
     applyDragAngle(sign * progress);
   });
