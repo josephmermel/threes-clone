@@ -165,7 +165,7 @@
   const ROTATE_PAUSE_MS = 120; // gap between stage 1 settling and stage 2 starting
   const FALL_MS = 280;         // stage 2: gravity's travel time
   const WINNER_FLIP_MS = 220;  // stage 2: a merge winner's pop/flip, once it lands
-  const LOSER_FLIP_MS = FALL_MS + 20;
+  const LOSER_FLIP_MS = FALL_MS + 60; // comfortable margin past the delayed fade's own completion
   const WILDCARD_CHANCE = 0.05;
   const TRIPLE_HINT_CHANCE = 0.6;
   const STARTER_FILL_RATIO = 0.4;
@@ -413,6 +413,29 @@
     el.style.transition = `left ${ms}ms cubic-bezier(.32,.72,.35,1), top ${ms}ms cubic-bezier(.32,.72,.35,1), opacity 0.08s ease, transform 0.08s ease`;
   }
 
+  // animateMove sets a merge loser's left/top (sliding it the rest of the way
+  // into the winner) and its opacity/transform (the fade-out) in the very same
+  // tick. At the other variants' matched slide/fade speed that's invisible,
+  // but stage 2's slide is now much longer than its 80ms fade default - fading
+  // out in 80ms while still sliding for 280ms meant losers visually vanished
+  // well before they'd traveled anywhere close to the winner, instead of
+  // appearing to fall into it. Delaying the (still-quick) fade so it only
+  // plays during the tail end of the slide - via transition-delay, since
+  // animateMove sets the style properties immediately either way - makes it
+  // read as "arrives, then gets absorbed" instead of "vanishes mid-air". The
+  // same fix covers a wildcard loser's card-flip-reveal, which is a CSS
+  // *animation* rather than a transition, via animation-delay instead.
+  const LOSER_EFFECT_MS = 90;
+  function setFallTileTransition(el, ms, isLoser) {
+    if (!isLoser) {
+      setTileTransition(el, ms);
+      return;
+    }
+    const delay = Math.max(0, ms - LOSER_EFFECT_MS);
+    el.style.transition = `left ${ms}ms cubic-bezier(.32,.72,.35,1), top ${ms}ms cubic-bezier(.32,.72,.35,1), opacity ${LOSER_EFFECT_MS}ms ease ${delay}ms, transform ${LOSER_EFFECT_MS}ms ease ${delay}ms`;
+    el.style.animationDelay = delay + 'ms';
+  }
+
   let grid;
   let tileValue;
   let tilePos;
@@ -479,6 +502,11 @@
   function makeTileEl(value, q, r, spawning) {
     const el = document.createElement('div');
     el.className = 'tile hex-shape' + (spawning ? ' spawning' : '');
+    // Drop the class once its one-shot fade-in finishes, so a tile that's been
+    // sitting on the board a while can never have a leftover CSS *animation*
+    // (as opposed to the transitions everything else here uses) quietly
+    // fighting over opacity/transform with a much later merge's fade-out.
+    if (spawning) el.addEventListener('animationend', () => el.classList.remove('spawning'), { once: true });
     paintTileScaled(el, value);
     el.style.width = HEX_W + 'px';
     el.style.height = HEX_H + 'px';
@@ -631,7 +659,10 @@
     // Stage 2's travel speed: applied to every tile currently on the board
     // (not the not-yet-created spawn) right before animateMove moves any of
     // them, since it has no duration knob of its own - see setTileTransition.
-    for (const el of elById.values()) setTileTransition(el, FALL_MS);
+    // Losers get the delayed-fade variant so they visibly fall the whole way
+    // before disappearing, rather than fading out mid-fall.
+    const loserIds = new Set(fallResult.allMerges.map(m => m.loserId));
+    for (const [id, el] of elById) setFallTileTransition(el, FALL_MS, loserIds.has(id));
 
     animateMove({
       elById, tileValue, tilePos, allMerges: fallResult.allMerges, loserFinalPos, spawnedId,
