@@ -513,6 +513,10 @@
   let recordMax;
   let highestMatchValue;
   let rotating = false;
+  // At most one pending direction, captured from input that arrived while the
+  // board was mid-animation (rotating). Fired the instant the board frees up,
+  // so a fast double-swipe feels absorbed instead of silently dropped.
+  let queuedMove = null;
 
   function drawStarterValue() {
     return pickSpawnValueForCap(STARTER_CAP);
@@ -623,6 +627,7 @@
     elById = new Map();
     idCounter = 1;
     rotating = false;
+    queuedMove = null;
 
     boardEl.innerHTML = '';
     cellBgEls = [];
@@ -752,16 +757,30 @@
       if (isWheelGameOver()) {
         overlayTextEl.textContent = 'Game Over';
         overlayEl.classList.remove('hidden');
+        queuedMove = null;
+      } else {
+        consumeQueuedMove();
       }
     }, settleMs);
+  }
+
+  // Fires the moment the board frees up if a move arrived while it was busy.
+  function consumeQueuedMove() {
+    if (!queuedMove) return;
+    const dir = queuedMove;
+    queuedMove = null;
+    move(dir);
   }
 
   // Stage 1, instant path (button click or keyboard): animate the full 60
   // degrees at ROTATE_MS, then - after the small settling pause - hand off to
   // stage 2. The drag path below does the equivalent but lets the player
   // control progress through stage 1 directly instead of jumping straight to done.
+  // If the board is already busy, the direction is queued instead of dropped -
+  // see queuedMove/consumeQueuedMove.
   function move(dir) {
-    if (!overlayEl.classList.contains('hidden') || rotating || drag) return;
+    if (!overlayEl.classList.contains('hidden')) return;
+    if (rotating || drag) { queuedMove = dir; return; }
     rotating = true;
 
     const sign = dir === 'CW' ? 1 : -1;
@@ -824,8 +843,12 @@
     }
   }
 
+  // Pointerdown/move keep tracking even while the board is busy (rotating),
+  // so a swipe that starts mid-animation isn't just silently ignored - it
+  // still gets its direction read, just with no live preview to animate
+  // (see the `rotating` checks below); finishDrag then queues or fires it.
   mainEl.addEventListener('pointerdown', (e) => {
-    if (!overlayEl.classList.contains('hidden') || rotating) return;
+    if (!overlayEl.classList.contains('hidden')) return;
     const rect = boardEl.getBoundingClientRect();
     const center = { x: rect.left + rect.width / 2, y: rect.top + rect.height / 2 };
     drag = { center, startAngle: angleFromCenter(e.clientX, e.clientY, center), dir: null, startCenters: null, t: 0 };
@@ -842,6 +865,7 @@
     if (!drag.dir) {
       if (Math.abs(delta) < DRAG_ANGLE_DEADZONE) return;
       drag.dir = delta > 0 ? 'CW' : 'CCW';
+      if (rotating) return; // busy - direction noted, but nothing to preview live
       const { newGrid, newTilePos, startCenters } = computeRotation(drag.dir);
       drag.newGrid = newGrid;
       drag.newTilePos = newTilePos;
@@ -852,6 +876,7 @@
       }
     }
 
+    if (!drag.startCenters) return; // board was busy when the deadzone was crossed
     const sign = drag.dir === 'CW' ? 1 : -1;
     const progress = Math.max(0, Math.min(60, sign * delta));
     drag.t = progress / 60;
@@ -862,14 +887,23 @@
     if (!drag) return;
     const { dir, startCenters, t, newGrid, newTilePos } = drag;
     drag = null;
-    if (!startCenters) return; // never left the deadzone - a tap, not a swipe
+    if (!dir) return; // never left the deadzone - a tap, not a swipe
+
+    if (!startCenters) {
+      // Board was busy for all or part of this swipe, so there was no live
+      // preview to release - resolve it as one decisive move instead: fire
+      // it now if the board just freed up, or queue it if it's still busy.
+      if (rotating) queuedMove = dir;
+      else move(dir);
+      return;
+    }
 
     rotating = true;
     const sign = dir === 'CW' ? 1 : -1;
     const committing = t >= DRAG_COMMIT_FRACTION;
     tweenArc(startCenters, sign * 60 * t, committing ? sign * 60 : 0, DRAG_SNAP_MS, () => {
       if (committing) setTimeout(() => startFallPhase(newGrid, newTilePos), ROTATE_PAUSE_MS);
-      else rotating = false;
+      else { rotating = false; consumeQueuedMove(); }
     });
   }
   mainEl.addEventListener('pointerup', finishDrag);
