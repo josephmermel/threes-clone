@@ -260,12 +260,12 @@
   function rotateCW(q, r) { return [-r, q + r]; }
   function rotateCCW(q, r) { return [q + r, -q]; }
 
-  // Collapses one line (array of {id,value}|null, index0 = wall/bottom side)
-  // *all the way* toward the wall, merging equal/compatible tiles as they
-  // collide (2048-style full slide), rather than each tile moving at most one
-  // slot (Threes-style, what the other two variants do). A tile that resulted
-  // from a merge this pass can't merge again this same pass, same as 2048.
-  function collapseLineFull(line) {
+  // One slide-and-merge pass: collapses a line toward the wall, merging
+  // equal/compatible tiles as they collide. A tile that resulted from a merge
+  // this pass can't merge again until the *next* pass - that's what makes it
+  // a single pass rather than a full cascade (collapseLineFull below runs
+  // this repeatedly to get the cascade).
+  function collapseOnePass(line) {
     const stack = [];
     const merges = [];
     for (const cell of line) {
@@ -287,13 +287,34 @@
     }
     const newLine = new Array(line.length).fill(null);
     for (let i = 0; i < stack.length; i++) newLine[i] = { id: stack[i].id, value: stack[i].value };
+    return { merges, newLine };
+  }
+
+  // Collapses one line (array of {id,value}|null, index0 = wall/bottom side)
+  // *all the way* toward the wall (2048-style full slide, rather than each
+  // tile moving at most one slot as in the other two, Threes-style variants),
+  // re-running the pass above until nothing more merges - so a merge that
+  // lands next to another matching tile (e.g. 3+3=6 sliding up against an
+  // existing 6) keeps cascading into 12, and so on, instead of stopping after
+  // one round. A tile can end up as a winner in one pass and then a loser in
+  // a later pass of the same cascade - see the nextOwner chain-resolution in
+  // startFallPhase, which depends on that.
+  function collapseLineFull(line) {
+    let current = line;
+    const allMerges = [];
+    for (;;) {
+      const { merges, newLine } = collapseOnePass(current);
+      current = newLine;
+      if (merges.length === 0) break;
+      allMerges.push(...merges);
+    }
     let moved = false;
     for (let i = 0; i < line.length; i++) {
-      const before = line[i], after = newLine[i];
+      const before = line[i], after = current[i];
       if ((before ? before.id : null) !== (after ? after.id : null) ||
           (before ? before.value : null) !== (after ? after.value : null)) { moved = true; break; }
     }
-    return { moved, merges, newLine };
+    return { moved, merges: allMerges, newLine: current };
   }
 
   function resolveFall(grid, tileValue) {
@@ -706,8 +727,19 @@
     grid = new Map(fallResult.newEntries.filter(([, id]) => id != null));
     const settledTilePos = {};
     for (const [key, id] of grid) settledTilePos[id] = parseKey(key);
+    // A cascade can make today's winner tomorrow's loser (3+3=6 sliding into
+    // an existing 6, then that 6 immediately merging again into 12) - so a
+    // merge's winnerId isn't necessarily one of today's survivors. Follow the
+    // chain of who-absorbed-whom to find the id that's actually still on the
+    // board, and send the loser to *that* tile's final resting place.
+    const nextOwner = new Map();
+    for (const { winnerId, loserId } of fallResult.allMerges) nextOwner.set(loserId, winnerId);
+    function finalSurvivorOf(id) {
+      while (nextOwner.has(id)) id = nextOwner.get(id);
+      return id;
+    }
     const loserFinalPos = {};
-    for (const { winnerId, loserId } of fallResult.allMerges) loserFinalPos[loserId] = settledTilePos[winnerId];
+    for (const { loserId } of fallResult.allMerges) loserFinalPos[loserId] = settledTilePos[finalSurvivorOf(loserId)];
     tilePos = settledTilePos;
 
     const openTopCells = TOP_EDGE_KEYS.filter(k => !grid.get(k));
