@@ -5,7 +5,19 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, minimum-scale=1.0, user-scalable=no">
 <title>Threes! Wheel</title>
 <link rel="icon" type="image/svg+xml" href="icon-wheel.svg">
-<link rel="apple-touch-icon" href="icon-wheel.svg">
+<!-- iOS ignores the manifest's icons for "Add to Home Screen" and wants a
+     plain PNG here specifically - an SVG silently falls back to a screenshot. -->
+<link rel="apple-touch-icon" href="apple-touch-icon-wheel.png">
+<link rel="manifest" href="manifest-wheel.json">
+<meta name="theme-color" content="#da3e3e">
+<!-- Gets "Add to Home Screen" to launch with no Safari chrome (address bar/
+     toolbar) - iOS has no real Fullscreen API, so this is the actual
+     fullscreen path there; see attachFullscreenToggle in threes-common.js,
+     which hides the in-page fullscreen button on iPhone for exactly this
+     reason. -->
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="Threes! Wheel">
 <link rel="stylesheet" href="threes-common.css">
 <style>
   :root {
@@ -201,15 +213,28 @@
   // margin on both sides.
   const BASE_BOTTOM_CLEARANCE = HAS_TOUCH ? 0 : (BASE_BTN_SIZE + BASE_BTN_GAP);
 
-  // --- Tile spawn distribution (same weighting as the hex variant) ---------
+  // --- Tile spawn distribution (tuned looser than the hex variant - see
+  // maxSpawnValue/LOW_VALUE_BOOST/CHAIN_DECAY below for why) ----------------
   const SPAWN_CAP = 96;
-  const LOW_VALUE_BOOST = 1.8;
-  const CHAIN_DECAY = 0.55;
+  // Lower than the hex variant's 1.8/0.55: this variant's fall-and-cascade
+  // gravity burns through 1s and 2s faster than a one-step slide does, so the
+  // same weighting read as far more 1/2-heavy here - a flat 50/50 split
+  // between 1 and 2 was already correct (verified by simulation), but 1+2
+  // combined still dominated ~80% of draws even well into the midgame.
+  const LOW_VALUE_BOOST = 1.3;
+  const CHAIN_DECAY = 0.65;
   const STARTER_CAP = 6;
 
   function maxSpawnValue(matchValue) {
-    if (matchValue < 12) return 2;
-    return Math.min(SPAWN_CAP, matchValue / 4);
+    // The hex variant gates variety behind matchValue >= 12 (i.e. behind
+    // already having chained two merges: 1+2=3, 3+3=6, 6+6=12) - here that
+    // left every spawn stuck at 1-or-2 for a long stretch of early play, since
+    // nothing else could open the gate faster. Unlocking as soon as a 3
+    // exists (matchValue >= 3) lets a 3 start appearing within the very first
+    // few spawns instead. Math.max(3, ...) keeps the floor at the chain's
+    // first rung rather than rounding down to nothing for matchValue 3-11.
+    if (matchValue < 3) return 2;
+    return Math.min(SPAWN_CAP, Math.max(3, matchValue / 4));
   }
   const LOW_SLOT = Symbol('low');
   function pickSpawnValueForCap(cap) {

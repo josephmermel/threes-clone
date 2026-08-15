@@ -200,7 +200,10 @@
     el.style.background = bg;
     el.style.color = fg;
     el.style.fontSize = value >= 100 ? '24px' : (value >= 1000 ? '20px' : '30px');
-    el.textContent = value;
+    // 1 and 2 are plain white/black and unlike every other tile never share a
+    // color with another value, so the numeral is redundant - leave them
+    // blank (this also applies wherever a wildcard reveals itself as a 1 or 2).
+    el.textContent = (value === 1 || value === 2) ? '' : value;
   }
 
   function paintTile(el, value) {
