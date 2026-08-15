@@ -197,7 +197,13 @@
   // of the way there. Only a real backtrack - dragging past the start point,
   // back toward/beyond zero, before releasing - cancels it.
   const DRAG_ANGLE_DEADZONE = 6;   // degrees of slop before a direction is even chosen
-  const DRAG_SENSITIVITY = 1.6;    // rotation progress moves this many degrees per degree swept
+  // Amplifies the live drag's rotation relative to the finger's actual angle
+  // swept - since this phase has no easing curve (it's a direct 1:1 readout of
+  // real finger motion, unlike the button/keyboard's easeOutCubic tween), a
+  // higher multiplier is what makes a swipe's naturally slow first ~50-100ms
+  // (a finger overcoming its own inertia) still produce a visible amount of
+  // rotation right away, rather than reading as a hesitant start.
+  const DRAG_SENSITIVITY = 2.4;    // rotation progress moves this many degrees per degree swept
   const DRAG_SNAP_MS = 120;        // stage 1: finishing (or undoing) a released drag
 
   // A touch-capable device can already rotate the wheel by swiping, so the
