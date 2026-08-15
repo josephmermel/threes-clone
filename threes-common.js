@@ -297,6 +297,11 @@
       elById, tileValue, tilePos, allMerges, loserFinalPos, spawnedId,
       boardEl, cellPos, createTileEl, milestoneIds, spawnEnterFrom,
       slideMs = 130, winnerFlipMs = 260, loserFlipMs = slideMs + 20,
+      // Optional: how long the spawned tile's entrance slide takes, for a
+      // caller whose spawnEnterFrom distance isn't the short, fixed one-pitch
+      // hop the default CSS transition (on the .tile base rule) was tuned
+      // for. Left unset, behavior is unchanged - just resets to that default.
+      spawnSlideMs,
       // Repainting a tile in place (a merge result, or a wildcard's flip-reveal)
       // needs the same scale-correction a freshly-created tile gets from the
       // caller's own createTileEl - otherwise a merged tile's font snaps back to
@@ -378,7 +383,9 @@
           el.style.top = spawnEnterFrom.top + 'px';
           boardEl.appendChild(el);
           void el.offsetWidth; // force layout so the jump above isn't itself animated
-          el.style.transition = '';
+          el.style.transition = spawnSlideMs != null
+            ? `left ${spawnSlideMs}ms cubic-bezier(.32,.72,.35,1), top ${spawnSlideMs}ms cubic-bezier(.32,.72,.35,1)`
+            : '';
           el.style.left = finalLeft;
           el.style.top = finalTop;
         } else {
@@ -538,6 +545,14 @@
   // (e.g. requires a user gesture, which a click already is, but just in case).
   function attachFullscreenToggle(btn) {
     if (!btn) return;
+    // iPhone Safari (unlike iPadOS Safari, which has supported this since
+    // 16.4) still throws on requestFullscreen() for anything but a <video>
+    // element, so the click above would always silently no-op there - hide
+    // the button instead of leaving a control that looks broken.
+    if (/iPhone|iPod/.test(navigator.userAgent)) {
+      btn.style.display = 'none';
+      return;
+    }
     btn.addEventListener('click', () => {
       if (!document.fullscreenElement) {
         document.documentElement.requestFullscreen().catch(() => {});
