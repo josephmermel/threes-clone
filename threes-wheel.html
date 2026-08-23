@@ -220,14 +220,21 @@
   const TRIPLE_HINT_CHANCE = 0.6;
   const STARTER_FILL_RATIO = 0.4;
 
+  // Four legal moves now, not two: CW or CCW, and 60 or 120 degrees. Touch
+  // reaches the second stop by dragging further past the first (see
+  // DRAG_EASE_RANGE_2 below); button/keyboard reaches it by pressing the same
+  // direction again in quick succession while the first press's rotation is
+  // still animating (see activeMove/upgradeActiveMove below move()).
+  //
   // Touch swipe drives stage 1 directly, live, instead of jumping straight to
-  // the button/keyboard's instant full turn: rotation tracks the actual angle
+  // the button/keyboard's instant turn: rotation tracks the actual angle
   // swept by the finger around the board's center (see the pointermove handler
-  // below). Releasing commits the turn as long as there's still *any* net
-  // progress in the chosen direction (past the deadzone) - a tiny flick is
-  // enough, on purpose, rather than requiring the drag to cross some fraction
-  // of the way there. Only a real backtrack - dragging past the start point,
-  // back toward/beyond zero, before releasing - cancels it.
+  // below). Releasing commits to whichever stop (60 or 120) is closest to the
+  // current progress, as long as there's still *any* net progress in the
+  // chosen direction (past the deadzone) - a tiny flick is enough, on
+  // purpose, rather than requiring the drag to cross some fraction of the way
+  // there. Only a real backtrack - dragging past the start point, back
+  // toward/beyond zero, before releasing - cancels it entirely.
   const DRAG_ANGLE_DEADZONE = 6;   // degrees of slop before a direction is even chosen
   // The live drag maps physical swipe angle to rotation through the *same*
   // easeOutCubic curve the button/keyboard tween uses (steepest right at the
@@ -239,9 +246,14 @@
   // is what actually makes the two feel alike: a small initial finger move
   // already produces a disproportionately large rotation, exactly like the
   // button's animation does in time instead of in physical distance.
-  // DRAG_EASE_RANGE is the physical swipe angle (degrees) that maps to a
-  // full 60-degree turn; past it, progress just clamps at 60.
+  // DRAG_EASE_RANGE is the physical swipe angle (degrees) that reaches the
+  // first (60-degree) stop. Past it, DRAG_EASE_RANGE_2 is the *additional*
+  // physical swipe needed to reach the second (120-degree) stop - a plain
+  // linear extension rather than another eased curve, since the point of the
+  // easing was specifically to fix a swipe's slow *start*, which no longer
+  // applies once the finger is already well into a fast, continuous drag.
   const DRAG_EASE_RANGE = 36;
+  const DRAG_EASE_RANGE_2 = 40;
   const DRAG_SNAP_MS = 120;        // stage 1: finishing (or undoing) a released drag
 
   // A touch-capable device can already rotate the wheel by swiping, so the
@@ -597,6 +609,13 @@
   // the button/keyboard instant turn and for finishing (or undoing) a
   // released drag - anywhere stage 1 needs to *animate* rather than track a
   // live pointer 1:1.
+  //
+  // Returns a handle ({ cancel, currentDeg }) rather than nothing, so a
+  // button/keyboard rotation can be *upgraded* mid-flight (a quick second
+  // same-direction press extends a 60-degree turn into a 120-degree one, see
+  // move()/upgradeActiveMove below) by cancelling this tween right where it
+  // is and starting a fresh one from that same angle toward the new target -
+  // continuing the spin rather than restarting it.
   function tweenArc(startCenters, fromDeg, toDeg, durationMs, onDone) {
     const bcx = BOARD_W / 2, bcy = BOARD_H / 2;
     const items = [];
@@ -607,17 +626,25 @@
       items.push({ el, cx, cy });
     }
     const t0 = performance.now();
+    let cancelled = false;
+    function rawProgress() {
+      return durationMs > 0 ? Math.min(1, (performance.now() - t0) / durationMs) : 1;
+    }
+    function currentDeg() {
+      return fromDeg + (toDeg - fromDeg) * easeOutCubic(rawProgress());
+    }
     function frame() {
-      const raw = durationMs > 0 ? Math.min(1, (performance.now() - t0) / durationMs) : 1;
-      const deg = fromDeg + (toDeg - fromDeg) * easeOutCubic(raw);
+      if (cancelled) return;
+      const deg = currentDeg();
       for (const { el, cx, cy } of items) {
         const p = rotatePoint(cx, cy, bcx, bcy, deg);
         el.style.transform = `translate(${p.x - HEX_W / 2}px, ${p.y - HEX_H / 2}px)`;
       }
-      if (raw < 1) requestAnimationFrame(frame);
+      if (rawProgress() < 1) requestAnimationFrame(frame);
       else if (onDone) onDone();
     }
     requestAnimationFrame(frame);
+    return { cancel: () => { cancelled = true; }, currentDeg };
   }
 
   let grid;
@@ -658,28 +685,31 @@
     return id;
   }
 
-  // With only 2 possible moves (rotate CW or CCW), the generic "board full and
-  // no adjacent mergeable pair anywhere" check the other variants use is too
-  // loose here: a full board can easily have a mergeable pair sitting
-  // somewhere in the raw hex-adjacency sense that these two specific moves can
-  // *never* actually bring together (confirmed empirically - alternating
-  // rotations can spin in place on a full board indefinitely with zero
-  // merges, while that check kept reporting "not over"). The real question is
-  // simpler and cheaper to answer directly: does *this* rotation, followed by
-  // its fall, produce any merge at all? If neither direction does, and the
-  // board is full, there is no move left that changes anything.
-  function wouldMergeIfRotated(dir) {
+  // With only 4 possible moves (rotate CW or CCW, 60 or 120 degrees), the
+  // generic "board full and no adjacent mergeable pair anywhere" check the
+  // other variants use is too loose here: a full board can easily have a
+  // mergeable pair sitting somewhere in the raw hex-adjacency sense that
+  // these specific moves can *never* actually bring together (confirmed
+  // empirically - alternating rotations can spin in place on a full board
+  // indefinitely with zero merges, while that check kept reporting "not
+  // over"). The real question is simpler and cheaper to answer directly:
+  // does *this* rotation, followed by its fall, produce any merge at all? If
+  // none of the 4 do, and the board is full, there is no move left that
+  // changes anything.
+  function wouldMergeIfRotated(dir, steps) {
     const rotateFn = dir === 'CW' ? rotateCW : rotateCCW;
     const testGrid = new Map();
     for (const [key, id] of grid) {
-      const [q, r] = parseKey(key);
-      const [nq, nr] = rotateFn(q, r);
-      testGrid.set(cellKey(nq, nr), id);
+      let [q, r] = parseKey(key);
+      for (let i = 0; i < steps; i++) [q, r] = rotateFn(q, r);
+      testGrid.set(cellKey(q, r), id);
     }
     return resolveFall(testGrid, tileValue).allMerges.length > 0;
   }
   function isWheelGameOver() {
-    return emptyKeys().length === 0 && !wouldMergeIfRotated('CW') && !wouldMergeIfRotated('CCW');
+    return emptyKeys().length === 0
+      && !wouldMergeIfRotated('CW', 1) && !wouldMergeIfRotated('CW', 2)
+      && !wouldMergeIfRotated('CCW', 1) && !wouldMergeIfRotated('CCW', 2);
   }
 
   function scaleFont(el) {
@@ -1008,22 +1038,26 @@
     overlayEl.classList.add('hidden');
   }
 
-  // Pure computation of what a rotation would do to the current grid: no
-  // mutation, no animation - just the resulting grid/positions, plus each
-  // currently-placed tile's pixel *center* before this rotation (what tweenArc
-  // needs to animate it along the correct arc; the "to" cell position isn't
-  // needed for that since rotating the center by exactly +-60 degrees around
-  // the board's center *is* where it ends up, by construction - no separate
-  // lookup can disagree). Shared by the instant button/keyboard path and the
-  // live drag preview.
-  function computeRotation(dir) {
+  // Pure computation of what a rotation (60 or 120 degrees, per `steps`)
+  // would do to the current grid: no mutation, no animation - just the
+  // resulting grid/positions, plus each currently-placed tile's pixel
+  // *center* before this rotation (what tweenArc needs to animate it along
+  // the correct arc; the "to" cell position isn't needed for that since
+  // rotating the center by exactly +-60/120 degrees around the board's
+  // center *is* where it ends up, by construction - no separate lookup can
+  // disagree). startCenters is identical regardless of steps (it's each
+  // tile's position *before* any rotation), so a caller computing both a
+  // 1-step and 2-step version for the same direction can reuse either one's.
+  // Shared by the instant button/keyboard path and the live drag preview.
+  function computeRotation(dir, steps = 1) {
     const rotateFn = dir === 'CW' ? rotateCW : rotateCCW;
     const newGrid = new Map();
     const newTilePos = {};
     const startCenters = new Map();
     for (const [key, id] of grid) {
       const [q, r] = parseKey(key);
-      const [nq, nr] = rotateFn(q, r);
+      let nq = q, nr = r;
+      for (let i = 0; i < steps; i++) [nq, nr] = rotateFn(nq, nr);
       newGrid.set(cellKey(nq, nr), id);
       newTilePos[id] = [nq, nr];
       const { left, top } = cellPos(q, r);
@@ -1205,23 +1239,62 @@
     move(dir);
   }
 
-  // Stage 1, instant path (button click or keyboard): animate the full 60
-  // degrees at ROTATE_MS, then - after the small settling pause - hand off to
-  // stage 2. The drag path below does the equivalent but lets the player
-  // control progress through stage 1 directly instead of jumping straight to done.
-  // If the board is already busy, the direction is queued instead of dropped -
-  // see queuedMove/consumeQueuedMove.
+  // While a button/keyboard rotation's stage 1 is still animating, this
+  // tracks enough to *upgrade* it if the same direction is pressed again -
+  // see move()/upgradeActiveMove. null the rest of the time (including all
+  // through stage 2, once the rotation itself has settled - by then it's too
+  // late to extend, a fresh press just queues a separate move as usual).
+  let activeMove = null; // { dir, startCenters, handle }
+
+  // Stage 1, instant path (button click or keyboard): animate 60 degrees at
+  // ROTATE_MS, then - after the small settling pause - hand off to stage 2.
+  // A second press of the *same* direction while this is still mid-rotation
+  // upgrades it to a full 120-degree turn instead of queuing a separate move
+  // - "double tap quickly to go one stop further" - by cancelling the
+  // in-flight tween right where it is and continuing on toward 120 instead
+  // of 60 (see upgradeActiveMove). The drag path below does the equivalent
+  // but lets the player control progress through stage 1 directly instead of
+  // jumping straight to done. If the board is already busy (and this isn't
+  // an upgrade), the direction is queued instead of dropped - see
+  // queuedMove/consumeQueuedMove.
   function move(dir) {
     if (!overlayEl.classList.contains('hidden')) return;
-    if (rotating || drag) { queuedMove = dir; return; }
+    if (rotating || drag) {
+      if (activeMove && activeMove.dir === dir) upgradeActiveMove();
+      else queuedMove = dir;
+      return;
+    }
     rotating = true;
     hapticTick(10);
+    beginRotation(dir, 1);
+  }
 
+  function beginRotation(dir, steps) {
     const sign = dir === 'CW' ? 1 : -1;
-    const { newGrid, newTilePos, startCenters } = computeRotation(dir);
-    tweenArc(startCenters, 0, sign * 60, ROTATE_MS, () => {
+    const { newGrid, newTilePos, startCenters } = computeRotation(dir, steps);
+    const handle = tweenArc(startCenters, 0, sign * 60 * steps, ROTATE_MS, () => {
+      activeMove = null;
       setTimeout(() => startFallPhase(newGrid, newTilePos), ROTATE_PAUSE_MS);
     });
+    activeMove = { dir, startCenters, handle };
+  }
+
+  // Cancels the in-flight 60-degree tween exactly where it is and starts a
+  // fresh one from that same angle on toward 120 instead - the wheel keeps
+  // spinning through the splice point rather than restarting, so a fast
+  // double-tap reads as one continuous, slightly-longer turn.
+  function upgradeActiveMove() {
+    const { dir, startCenters, handle } = activeMove;
+    const sign = dir === 'CW' ? 1 : -1;
+    const fromDeg = handle.currentDeg();
+    handle.cancel();
+    const { newGrid, newTilePos } = computeRotation(dir, 2);
+    hapticTick(10);
+    const newHandle = tweenArc(startCenters, fromDeg, sign * 120, ROTATE_MS, () => {
+      activeMove = null;
+      setTimeout(() => startFallPhase(newGrid, newTilePos), ROTATE_PAUSE_MS);
+    });
+    activeMove = { dir, startCenters, handle: newHandle };
   }
 
   applyBoardDimensions();
@@ -1249,18 +1322,20 @@
   // the board's center, exactly like actually turning a wheel by its rim.
   // Concretely: track the angle from the board's center to the pointer, and
   // rotate the wheel by exactly how much that angle has changed since
-  // pointerdown (clamped to +-60 degrees). This one rule reproduces every
-  // case a "grab the rim" gesture should: at the top of the circle, rightward
-  // motion is clockwise; at the bottom, leftward is; at the left edge, upward
-  // is; at the right edge, downward is - which is also exactly why a swipe
-  // starting below the board (the common case, given how much of the tap
-  // area is blank space under it) reads as "left = clockwise, right =
-  // counterclockwise" at a glance, without that being a special case.
+  // pointerdown (clamped to +-120 degrees now, not +-60 - see
+  // DRAG_EASE_RANGE_2). This one rule reproduces every case a "grab the rim"
+  // gesture should: at the top of the circle, rightward motion is clockwise;
+  // at the bottom, leftward is; at the left edge, upward is; at the right
+  // edge, downward is - which is also exactly why a swipe starting below the
+  // board (the common case, given how much of the tap area is blank space
+  // under it) reads as "left = clockwise, right = counterclockwise" at a
+  // glance, without that being a special case.
   //
-  // Releasing snaps the rest of the way to whichever end (full turn or back
-  // to start) is on the committed side of the halfway mark, then either hands
-  // off to stage 2 (committed) or just stops (cancelled, no state change at all).
-  let drag = null; // { center, startAngle, dir, startCenters, newGrid, newTilePos, t }
+  // Releasing snaps the rest of the way to whichever stop - back to start, 60
+  // degrees, or 120 - the current progress is closest to, then either hands
+  // off to stage 2 (60 or 120 committed) or just stops (cancelled, no state
+  // change at all).
+  let drag = null; // { center, startAngle, dir, startCenters, newGrid1, newTilePos1, newGrid2, newTilePos2, progressDeg }
 
   function angleFromCenter(clientX, clientY, center) {
     return Math.atan2(clientY - center.y, clientX - center.x) * 180 / Math.PI;
@@ -1284,7 +1359,7 @@
     if (!overlayEl.classList.contains('hidden')) return;
     const rect = boardEl.getBoundingClientRect();
     const center = { x: rect.left + rect.width / 2, y: rect.top + rect.height / 2 };
-    drag = { center, startAngle: angleFromCenter(e.clientX, e.clientY, center), dir: null, startCenters: null, t: 0 };
+    drag = { center, startAngle: angleFromCenter(e.clientX, e.clientY, center), dir: null, startCenters: null, progressDeg: 0 };
     mainEl.setPointerCapture(e.pointerId);
   });
 
@@ -1299,11 +1374,15 @@
       if (Math.abs(delta) < DRAG_ANGLE_DEADZONE) return;
       drag.dir = delta > 0 ? 'CW' : 'CCW';
       if (rotating) return; // busy - direction noted, but nothing to preview live
-      const { newGrid, newTilePos, startCenters } = computeRotation(drag.dir);
-      drag.newGrid = newGrid;
-      drag.newTilePos = newTilePos;
-      drag.startCenters = startCenters;
-      for (const [id] of startCenters) {
+      // Both stops are precomputed once up front, from the same (unrotated)
+      // grid - which one actually applies is only decided on release, once
+      // the final progress (and so which stop it's closest to) is known.
+      const step1 = computeRotation(drag.dir, 1);
+      const step2 = computeRotation(drag.dir, 2);
+      drag.newGrid1 = step1.newGrid; drag.newTilePos1 = step1.newTilePos;
+      drag.newGrid2 = step2.newGrid; drag.newTilePos2 = step2.newTilePos;
+      drag.startCenters = step1.startCenters; // identical either way - see computeRotation
+      for (const [id] of drag.startCenters) {
         const el = elById.get(id);
         if (el) el.style.transition = 'none';
       }
@@ -1311,21 +1390,31 @@
 
     if (!drag.startCenters) return; // board was busy when the deadzone was crossed
     const sign = drag.dir === 'CW' ? 1 : -1;
-    const rawT = Math.max(0, Math.min(1, (sign * delta) / DRAG_EASE_RANGE));
-    drag.t = easeOutCubic(rawT);
-    applyDragAngle(sign * 60 * drag.t);
+    const swept = sign * delta; // physical degrees swept in the committed direction (negative = backtrack past start)
+    let progressDeg;
+    if (swept <= 0) {
+      progressDeg = 0;
+    } else if (swept <= DRAG_EASE_RANGE) {
+      progressDeg = 60 * easeOutCubic(swept / DRAG_EASE_RANGE);
+    } else {
+      const extra = Math.min(DRAG_EASE_RANGE_2, swept - DRAG_EASE_RANGE);
+      progressDeg = 60 + 60 * (extra / DRAG_EASE_RANGE_2);
+    }
+    drag.progressDeg = progressDeg;
+    applyDragAngle(sign * progressDeg);
   });
 
   function finishDrag() {
     if (!drag) return;
-    const { dir, startCenters, t, newGrid, newTilePos } = drag;
+    const { dir, startCenters, progressDeg, newGrid1, newTilePos1, newGrid2, newTilePos2 } = drag;
     drag = null;
     if (!dir) return; // never left the deadzone - a tap, not a swipe
 
     if (!startCenters) {
       // Board was busy for all or part of this swipe, so there was no live
-      // preview to release - resolve it as one decisive move instead: fire
-      // it now if the board just freed up, or queue it if it's still busy.
+      // preview to release - resolve it as one decisive (60-degree) move
+      // instead: fire it now if the board just freed up, or queue it if it's
+      // still busy.
       if (rotating) queuedMove = dir;
       else move(dir);
       return;
@@ -1333,9 +1422,19 @@
 
     rotating = true;
     const sign = dir === 'CW' ? 1 : -1;
-    const committing = t > 0; // any net progress in the chosen direction commits; a backtrack to zero cancels
+    // Any net progress in the chosen direction commits at least the first
+    // stop; a backtrack to zero cancels entirely. Past the halfway point
+    // between the two stops (90 degrees), it commits the second stop instead
+    // - so releasing anywhere just short of 120 still snaps forward to it,
+    // and releasing well short of that (even after passing 60 on the way)
+    // settles back to the 60-degree stop, not forward to 120.
+    const committing = progressDeg > 0;
+    const steps = progressDeg > 90 ? 2 : 1;
     if (committing) hapticTick(10);
-    tweenArc(startCenters, sign * 60 * t, committing ? sign * 60 : 0, DRAG_SNAP_MS, () => {
+    const targetDeg = committing ? sign * 60 * steps : 0;
+    const newGrid = steps === 2 ? newGrid2 : newGrid1;
+    const newTilePos = steps === 2 ? newTilePos2 : newTilePos1;
+    tweenArc(startCenters, sign * progressDeg, targetDeg, DRAG_SNAP_MS, () => {
       if (committing) setTimeout(() => startFallPhase(newGrid, newTilePos), ROTATE_PAUSE_MS);
       else { rotating = false; consumeQueuedMove(); }
     });
