@@ -108,6 +108,33 @@
             drop-shadow(0 2px 3px rgba(0,0,0,0.25))
             drop-shadow(0 0 1px rgba(255,255,255,0.5));
   }
+  /* A detonated tile pops outward first (unlike a plain merge loser's quiet
+     shrink-and-fade) before vanishing, so a whole rank clearing off the
+     board reads as an explosion rather than several tiles quietly fading. */
+  @keyframes bombExplode {
+    0%   { transform: scale(1); opacity: 1; }
+    30%  { transform: scale(1.45); opacity: 1; }
+    60%  { transform: scale(1.15); opacity: 0.9; }
+    100% { transform: scale(0.1); opacity: 0; }
+  }
+  .tile.bomb-explode { animation: bombExplode 0.34s ease-out forwards; z-index: 3; }
+  /* A radial flash at each detonated tile's own position - tinted to that
+     tile's own color (set inline per burst, see spawnColoredGlow), so the
+     "same rank exploding away" reads as connected color pops across the
+     board rather than one single effect. The bomb itself gets a distinct
+     flash color instead of a rank tint. Otherwise identical to
+     ThreesCommon's .milestone-glow. */
+  @keyframes bombGlow {
+    0%   { transform: scale(0.6); opacity: 0.95; }
+    100% { transform: scale(2.3); opacity: 0; }
+  }
+  .bomb-glow {
+    position: absolute;
+    border-radius: 50%;
+    animation: bombGlow 0.45s ease-out;
+    pointer-events: none;
+    z-index: 4;
+  }
 
   /* Two big rotate buttons sit just outside the board's flat left/right edges
      (siblings of #board, positioned in JS from the board's current pixel size,
@@ -230,7 +257,7 @@
   // wildcard) does.
   const BOMB = 'B';
   const BOMB_CHANCE = 0.05;
-  const BOMB_POP_MS = 220; // detonation fade/pop, before the gap-closing slide
+  const BOMB_POP_MS = 340; // detonation explode-and-vanish, before the gap-closing slide
   const TRIPLE_HINT_CHANCE = 0.6;
   const STARTER_FILL_RATIO = 0.4;
 
@@ -924,6 +951,30 @@
     setTimeout(() => glowPos.remove(), 650);
   }
 
+  // Same positioning trick as spawnMilestoneGlowWheel above, but tinted to
+  // an arbitrary color instead of the fixed white .milestone-glow - used for
+  // a bomb detonation's burst, where each cleared tile's own color (not one
+  // fixed color) is what makes a whole rank clearing away read as connected
+  // pops rather than one generic effect.
+  function spawnColoredGlow(wrap, boardEl, color) {
+    const face = faceOf(wrap);
+    const glowPos = document.createElement('div');
+    glowPos.style.position = 'absolute';
+    glowPos.style.left = '0';
+    glowPos.style.top = '0';
+    glowPos.style.transform = wrap.style.transform;
+    const glow = document.createElement('div');
+    glow.className = 'bomb-glow';
+    glow.style.left = '0';
+    glow.style.top = '0';
+    glow.style.width = face.style.width;
+    glow.style.height = face.style.height;
+    glow.style.background = `radial-gradient(circle, ${color} 0%, transparent 70%)`;
+    glowPos.appendChild(glow);
+    boardEl.appendChild(glowPos);
+    setTimeout(() => glowPos.remove(), 500);
+  }
+
   // Wheel-local fork of ThreesCommon's animateMove: identical behavior and
   // timing (losers slide into their winner's cell and fade/flip away,
   // survivors glide to their new cell and pop/flip, and only once all of
@@ -1128,25 +1179,28 @@
     }
   }
 
-  // Detonates every tile a bomb (or chain of bombs) just cleared: a burst at
-  // each bomb's own position, then everything in the batch (the bomb(s) and
-  // every same-rank tile) fades and shrinks away in place - there's no
-  // winner for them to slide toward, unlike an ordinary merge. Positions
-  // come from tilePosBefore since these ids are already gone from the live
-  // tilePos/grid (resolveBombDetonations already removed them) by the time
-  // this plays.
+  // Detonates every tile a bomb (or chain of bombs) just cleared: the
+  // bomb(s) flash first, then every tile in the batch (the bomb(s) and
+  // every same-rank tile) pops outward and vanishes in place, each with its
+  // own color-matched burst - an explosion, not a quiet merge-style
+  // shrink-and-fade (there's no winner for them to slide toward anyway,
+  // unlike an ordinary merge). Positions/colors come straight off each
+  // tile's still-attached DOM element (elById/faceOf) since these ids are
+  // already gone from tileValue/grid (resolveBombDetonations already
+  // removed them) by the time this plays.
   function playBombRemovals(events, removedIds, boardEl) {
     for (const { bombId } of events) {
       const wrap = elById.get(bombId);
-      if (wrap) spawnMilestoneGlowWheel(wrap, boardEl);
+      if (wrap) spawnColoredGlow(wrap, boardEl, 'rgba(255,140,60,0.95)');
     }
     for (const id of removedIds) {
       const wrap = elById.get(id);
       if (!wrap) continue;
       const face = faceOf(wrap);
-      face.style.transition = `opacity ${BOMB_POP_MS}ms ease, transform ${BOMB_POP_MS}ms ease`;
-      face.style.opacity = '0';
-      face.style.transform = 'scale(0.3)';
+      spawnColoredGlow(wrap, boardEl, face.style.background || 'rgba(255,255,255,0.9)');
+      face.classList.remove('merging', 'milestone-pop');
+      void face.offsetWidth; // force layout so a tile mid-merge-pop restarts cleanly into this animation instead of blending with it
+      face.classList.add('bomb-explode');
       setTimeout(() => {
         wrap.remove();
         elById.delete(id);
