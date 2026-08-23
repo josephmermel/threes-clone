@@ -781,9 +781,10 @@
   // board's stacked drop-shadow + clip-path tiles) noticeable on mobile.
   function animateMoveWheel(ctx) {
     const {
-      elById, tileValue, tilePos, allMerges, loserFinalPos, spawnedId,
+      elById, tileValue, tilePos, allMerges, loserFinalPos, spawnedId, spawnValue,
       boardEl, cellPos, createTileEl, milestoneIds, spawnEnterFrom,
       slideMs, winnerFlipMs, loserFlipMs, spawnSlideMs,
+      spawnMerges, spawnLoserFinalPos,
     } = ctx;
     const winnerMeta = new Map(allMerges.map(m => [m.winnerId, m]));
 
@@ -850,7 +851,11 @@
       const spawnDelay = allMerges.length > 0 ? slideMs + winnerFlipMs : slideMs;
       setTimeout(() => {
         const [a, b] = tilePos[spawnedId];
-        const wrap = createTileEl(tileValue[spawnedId], a, b, false);
+        // Paint with spawnValue (its value *before* any landing-merge), not
+        // tileValue[spawnedId] - if it goes on to merge away below, that
+        // entry may already be gone by now (tileValue was updated synchronously
+        // back in startFallPhase, well before this tile even visually exists).
+        const wrap = createTileEl(spawnValue, a, b, false);
         if (spawnEnterFrom) {
           const finalTransform = wrap.style.transform;
           wrap.style.transition = 'none';
@@ -865,7 +870,83 @@
           boardEl.appendChild(wrap);
         }
         elById.set(spawnedId, wrap);
+
+        // If the spawn landed on a match, play that merge (and any further
+        // cascade among the heap tiles below it) right after it's visibly
+        // finished falling in - same collapse rule as a rotation's fall,
+        // just triggered by the spawn instead of a rotation (see
+        // startFallPhase). Skipped entirely if it didn't land on a match.
+        if (spawnMerges && spawnMerges.length > 0) {
+          const mergeDelay = spawnEnterFrom ? (spawnSlideMs != null ? spawnSlideMs : 0) : 0;
+          setTimeout(() => {
+            playMergeEvents(spawnMerges, spawnLoserFinalPos, tileValue, milestoneIds, boardEl);
+          }, mergeDelay);
+        }
       }, spawnDelay);
+    }
+  }
+
+  // Plays the loser-slides-and-fades / winner-pops-or-flips visual treatment
+  // for an explicit list of merge events, rather than scanning every current
+  // tile the way the main loops above do - used for a spawn's own landing
+  // merge, where only the newly-spawned tile and whatever it touched are
+  // involved. Reuses the exact same transitions/timings/CSS classes as the
+  // main merge handling above for a consistent look.
+  function playMergeEvents(merges, finalPosMap, tileValue, milestoneIds, boardEl) {
+    // A winnerId here isn't necessarily a final survivor: if this batch
+    // itself cascades (the spawn's merge lands next to another match, same
+    // as any other cascade), an early winner can become a later loser within
+    // these same events. winnerMeta would otherwise still process it as a
+    // "survivor" purely because it once won - unlike the main loops above,
+    // which only ever visit ids still present in tilePos (final by
+    // definition), this one works from an explicit list, so it needs its own
+    // explicit exclusion.
+    const loserIdsInBatch = new Set(merges.map(m => m.loserId));
+    const winnerMeta = new Map(merges.map(m => [m.winnerId, m]));
+    for (const m of merges) {
+      const { loserId, loserWasWild, revealValue } = m;
+      const wrap = elById.get(loserId);
+      if (!wrap) continue;
+      const face = faceOf(wrap);
+      const [a, b] = finalPosMap[loserId];
+      const { left, top } = cellPos(a, b);
+      setTilePosTransition(wrap, FALL_MS);
+      setLoserFaceTransition(face, FALL_MS);
+      wrap.style.zIndex = '1';
+      wrap.style.transform = `translate(${left}px, ${top}px)`;
+
+      if (loserWasWild) {
+        face.classList.add('wild-loser-flip');
+        setTimeout(() => paintNumeralScaled(face, revealValue), Math.round(LOSER_FLIP_MS * 0.5));
+      } else {
+        face.style.opacity = '0';
+        face.style.transform = 'scale(0.4)';
+      }
+      setTimeout(() => {
+        wrap.remove();
+        elById.delete(loserId);
+      }, LOSER_FLIP_MS);
+    }
+
+    for (const [winnerId, m] of winnerMeta) {
+      if (loserIdsInBatch.has(winnerId)) continue; // absorbed further in this same cascade - not a final survivor
+      const wrap = elById.get(winnerId);
+      if (!wrap) continue;
+      const face = faceOf(wrap);
+      if (m.winnerWasWild) {
+        face.classList.remove('merging');
+        face.classList.add('wild-winner-flip');
+        setTimeout(() => paintTileScaled(face, m.newValue), Math.round(WINNER_FLIP_MS * 0.5));
+        setTimeout(() => face.classList.remove('wild-winner-flip'), WINNER_FLIP_MS);
+      } else {
+        const value = tileValue[winnerId];
+        const isMilestone = milestoneIds && milestoneIds.has(winnerId);
+        paintTileScaled(face, value);
+        face.classList.remove('merging', 'milestone-pop');
+        void face.offsetWidth;
+        face.classList.add(isMilestone ? 'milestone-pop' : 'merging');
+        if (isMilestone) spawnMilestoneGlowWheel(wrap, boardEl);
+      }
     }
   }
 
@@ -995,27 +1076,74 @@
         if (!grid.get(key)) { spawnCells.push({ key, enterFromKey: line[line.length - 1] }); break; }
       }
     }
-    let spawnedId = null, spawnEnterFrom = null;
+    let spawnedId = null, spawnEnterFrom = null, spawnValue = null;
+    let spawnMerges = [], spawnLoserFinalPos = {};
     if (spawnCells.length > 0) {
       const { key, enterFromKey } = pickRandom(spawnCells);
       const [q, r] = parseKey(key);
       const id = idCounter++;
-      grid.set(key, id);
       recordSpawn(nextValue);
-      tileValue[id] = nextValue;
-      tilePos[id] = [q, r];
+      spawnValue = nextValue;
       spawnedId = id;
       nextValue = drawNextValue();
       spawnEnterFrom = cellPos(...parseKey(enterFromKey));
+      // Purely for the animation's benefit - where to *create* the spawn tile
+      // - regardless of whether it goes on to merge away below. grid (the
+      // real occupancy map) is untouched here; this round's tilePos object
+      // gets rebuilt from scratch next round, so a stale entry for a tile
+      // that dies below never lingers.
+      tilePos[id] = [q, r];
+
+      // If the new tile can merge with whatever's already at the top of its
+      // column's heap, resolve that right away - the same full-cascade
+      // collapse the rotation stage uses (collapseLineFull), just seeded
+      // with this spawn instead of a rotation. grid/tileValue/tilePos land in
+      // their final, post-cascade state now; the *visual* merge plays out
+      // later, once the spawn tile has actually finished falling in (see
+      // animateMoveWheel/playMergeEvents).
+      const line = FALL_LINES.find(l => l.includes(key));
+      const slots = line.map(k => {
+        if (k === key) return { id, value: spawnValue };
+        const existingId = grid.get(k);
+        return existingId ? { id: existingId, value: tileValue[existingId] } : null;
+      });
+      const { merges, newLine } = collapseLineFull(slots);
+      spawnMerges = merges;
+      if (merges.length > 0) {
+        for (const { winnerId, loserId, newValue } of merges) {
+          tileValue[winnerId] = newValue;
+          delete tileValue[loserId];
+          if (newValue > highestMatchValue) highestMatchValue = newValue;
+        }
+        const spawnNextOwner = new Map();
+        for (const { winnerId, loserId } of merges) spawnNextOwner.set(loserId, winnerId);
+        const spawnFinalSurvivorOf = (fid) => {
+          while (spawnNextOwner.has(fid)) fid = spawnNextOwner.get(fid);
+          return fid;
+        };
+        line.forEach((k, i) => {
+          if (newLine[i]) { grid.set(k, newLine[i].id); tilePos[newLine[i].id] = parseKey(k); }
+          else grid.delete(k);
+        });
+        for (const { loserId } of merges) {
+          spawnLoserFinalPos[loserId] = tilePos[spawnFinalSurvivorOf(loserId)];
+        }
+      } else {
+        grid.set(key, id);
+        tileValue[id] = spawnValue;
+      }
     }
 
     let milestoneIds = null;
     const newMax = currentMaxValue(tileValue);
     if (newMax > recordMax) {
-      milestoneIds = new Set(fallResult.allMerges.filter(m => m.newValue === newMax).map(m => m.winnerId));
+      const allMergesSoFar = fallResult.allMerges.concat(spawnMerges);
+      milestoneIds = new Set(allMergesSoFar.filter(m => m.newValue === newMax).map(m => m.winnerId));
       recordMax = newMax;
     }
-    if (fallResult.allMerges.length > 0) hapticTick(milestoneIds && milestoneIds.size > 0 ? [15, 40, 15] : 20);
+    if (fallResult.allMerges.length > 0 || spawnMerges.length > 0) {
+      hapticTick(milestoneIds && milestoneIds.size > 0 ? [15, 40, 15] : 20);
+    }
 
     // Stage 2's travel speed: applied to every tile currently on the board
     // (not the not-yet-created spawn) right before animateMoveWheel moves any
@@ -1030,7 +1158,7 @@
     }
 
     animateMoveWheel({
-      elById, tileValue, tilePos, allMerges: fallResult.allMerges, loserFinalPos, spawnedId,
+      elById, tileValue, tilePos, allMerges: fallResult.allMerges, loserFinalPos, spawnedId, spawnValue,
       boardEl, cellPos, createTileEl: makeTileEl, milestoneIds, spawnEnterFrom,
       slideMs: FALL_MS, winnerFlipMs: WINNER_FLIP_MS, loserFlipMs: LOSER_FLIP_MS,
       // Reuses the same gravity pace as the rest of the fall stage - the entry
@@ -1038,12 +1166,15 @@
       // (unlike the other variants' fixed one-pitch spawn hop), so a fixed
       // short transition would look like a snap rather than a fall.
       spawnSlideMs: FALL_MS,
+      spawnMerges, spawnLoserFinalPos,
     });
     renderNextIndicator(nextIndicatorEl, nextValue, TRIPLE_HINT_CHANCE);
     updatePageBackground(highestMatchValue);
     updateScoreDisplay(true);
 
-    const settleMs = (fallResult.allMerges.length > 0 ? FALL_MS + WINNER_FLIP_MS : FALL_MS) + 30;
+    const settleMs = (fallResult.allMerges.length > 0 ? FALL_MS + WINNER_FLIP_MS : FALL_MS) + 30
+      + (spawnCells.length > 0 ? FALL_MS : 0) // the spawn's own fall-in
+      + (spawnMerges.length > 0 ? WINNER_FLIP_MS : 0); // its landing-merge pop, if any
     setTimeout(() => {
       rotating = false;
       if (isWheelGameOver()) {
