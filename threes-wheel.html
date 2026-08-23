@@ -222,9 +222,9 @@
 
   // Four legal moves now, not two: CW or CCW, and 60 or 120 degrees. Touch
   // reaches the second stop by dragging further past the first (see
-  // DRAG_EASE_RANGE_2 below); button/keyboard reaches it by pressing the same
-  // direction again in quick succession while the first press's rotation is
-  // still animating (see activeMove/upgradeActiveMove below move()).
+  // DRAG_EASE_RANGE_2 below); button/keyboard reaches it by holding the
+  // press down past LONG_PRESS_MS before releasing, rather than a quick
+  // tap-and-release (see activeMove/onPressEnd/finalizeMove below move()).
   //
   // Touch swipe drives stage 1 directly, live, instead of jumping straight to
   // the button/keyboard's instant turn: rotation tracks the actual angle
@@ -609,13 +609,6 @@
   // the button/keyboard instant turn and for finishing (or undoing) a
   // released drag - anywhere stage 1 needs to *animate* rather than track a
   // live pointer 1:1.
-  //
-  // Returns a handle ({ cancel, currentDeg }) rather than nothing, so a
-  // button/keyboard rotation can be *upgraded* mid-flight (a quick second
-  // same-direction press extends a 60-degree turn into a 120-degree one, see
-  // move()/upgradeActiveMove below) by cancelling this tween right where it
-  // is and starting a fresh one from that same angle toward the new target -
-  // continuing the spin rather than restarting it.
   function tweenArc(startCenters, fromDeg, toDeg, durationMs, onDone) {
     const bcx = BOARD_W / 2, bcy = BOARD_H / 2;
     const items = [];
@@ -626,25 +619,17 @@
       items.push({ el, cx, cy });
     }
     const t0 = performance.now();
-    let cancelled = false;
-    function rawProgress() {
-      return durationMs > 0 ? Math.min(1, (performance.now() - t0) / durationMs) : 1;
-    }
-    function currentDeg() {
-      return fromDeg + (toDeg - fromDeg) * easeOutCubic(rawProgress());
-    }
     function frame() {
-      if (cancelled) return;
-      const deg = currentDeg();
+      const raw = durationMs > 0 ? Math.min(1, (performance.now() - t0) / durationMs) : 1;
+      const deg = fromDeg + (toDeg - fromDeg) * easeOutCubic(raw);
       for (const { el, cx, cy } of items) {
         const p = rotatePoint(cx, cy, bcx, bcy, deg);
         el.style.transform = `translate(${p.x - HEX_W / 2}px, ${p.y - HEX_H / 2}px)`;
       }
-      if (rawProgress() < 1) requestAnimationFrame(frame);
+      if (raw < 1) requestAnimationFrame(frame);
       else if (onDone) onDone();
     }
     requestAnimationFrame(frame);
-    return { cancel: () => { cancelled = true; }, currentDeg };
   }
 
   let grid;
@@ -1236,65 +1221,90 @@
     if (!queuedMove) return;
     const dir = queuedMove;
     queuedMove = null;
-    move(dir);
+    move(dir, false); // no press is currently in progress to wait on - just a plain 60
   }
 
-  // While a button/keyboard rotation's stage 1 is still animating, this
-  // tracks enough to *upgrade* it if the same direction is pressed again -
-  // see move()/upgradeActiveMove. null the rest of the time (including all
-  // through stage 2, once the rotation itself has settled - by then it's too
-  // late to extend, a fresh press just queues a separate move as usual).
-  let activeMove = null; // { dir, startCenters, handle }
+  // A button/keyboard rotation always starts as a plain 60-degree turn, but
+  // doesn't hand off to stage 2 the instant that turn finishes animating -
+  // it waits at 60 for the actual release (see onPressEnd/finalizeMove)
+  // before deciding whether to continue on to 120. A tap-and-release well
+  // under LONG_PRESS_MS settles for 60 (as soon as the animation itself
+  // catches up, if it hasn't already); holding past it and *then* releasing
+  // continues the spin from wherever it's sitting on to 120 instead. Both
+  // the tween finishing and the button/key being released have to have
+  // happened before a move is finalized - whichever comes second is what
+  // actually triggers it.
+  let activeMove = null; // { dir, startCenters, newGrid1, newTilePos1, tweenDone, released, upgrade }
+  const LONG_PRESS_MS = 300;
+  // Independent per direction (not just "the one thing currently held") so a
+  // stray overlapping press/hold of the *other* direction - e.g. a key held
+  // down while also clicking a button - can't clobber this one's release
+  // bookkeeping and leave it waiting forever.
+  const pressStart = { CW: null, CCW: null };
 
-  // Stage 1, instant path (button click or keyboard): animate 60 degrees at
+  // Stage 1, instant path (button/keyboard): animate 60 degrees at
   // ROTATE_MS, then - after the small settling pause - hand off to stage 2.
-  // A second press of the *same* direction while this is still mid-rotation
-  // upgrades it to a full 120-degree turn instead of queuing a separate move
-  // - "double tap quickly to go one stop further" - by cancelling the
-  // in-flight tween right where it is and continuing on toward 120 instead
-  // of 60 (see upgradeActiveMove). The drag path below does the equivalent
-  // but lets the player control progress through stage 1 directly instead of
-  // jumping straight to done. If the board is already busy (and this isn't
-  // an upgrade), the direction is queued instead of dropped - see
-  // queuedMove/consumeQueuedMove.
-  function move(dir) {
+  // `live` distinguishes an actual press (waits for onPressEnd's release
+  // verdict before finalizing - see beginRotation) from a queued move being
+  // consumed once the board frees up (no press is currently in progress to
+  // wait on, so it just settles for a plain 60 as soon as the tween's done).
+  // The drag path below does the live-press equivalent but lets the player
+  // control progress through stage 1 directly instead of jumping straight to
+  // done. If the board is already busy, the direction is queued instead of
+  // dropped - see queuedMove/consumeQueuedMove.
+  function move(dir, live) {
     if (!overlayEl.classList.contains('hidden')) return;
-    if (rotating || drag) {
-      if (activeMove && activeMove.dir === dir) upgradeActiveMove();
-      else queuedMove = dir;
-      return;
-    }
+    if (rotating || drag) { queuedMove = dir; return; }
     rotating = true;
     hapticTick(10);
-    beginRotation(dir, 1);
+    beginRotation(dir, live);
   }
 
-  function beginRotation(dir, steps) {
+  function beginRotation(dir, live) {
     const sign = dir === 'CW' ? 1 : -1;
-    const { newGrid, newTilePos, startCenters } = computeRotation(dir, steps);
-    const handle = tweenArc(startCenters, 0, sign * 60 * steps, ROTATE_MS, () => {
-      activeMove = null;
-      setTimeout(() => startFallPhase(newGrid, newTilePos), ROTATE_PAUSE_MS);
+    const { newGrid: newGrid1, newTilePos: newTilePos1, startCenters } = computeRotation(dir, 1);
+    activeMove = { dir, startCenters, newGrid1, newTilePos1, tweenDone: false, released: !live, upgrade: false };
+    tweenArc(startCenters, 0, sign * 60, ROTATE_MS, () => {
+      if (!activeMove || activeMove.dir !== dir) return; // safety - shouldn't happen, but never act on a stale tween
+      activeMove.tweenDone = true;
+      if (activeMove.released) finalizeMove();
     });
-    activeMove = { dir, startCenters, handle };
   }
 
-  // Cancels the in-flight 60-degree tween exactly where it is and starts a
-  // fresh one from that same angle on toward 120 instead - the wheel keeps
-  // spinning through the splice point rather than restarting, so a fast
-  // double-tap reads as one continuous, slightly-longer turn.
-  function upgradeActiveMove() {
-    const { dir, startCenters, handle } = activeMove;
+  // Called once both the 60-degree tween has visually finished *and* the
+  // press has been released (in whichever order those happen to occur) -
+  // either continues on to 120 (see the comment on LONG_PRESS_MS above) or
+  // hands off to stage 2 right where it's sitting.
+  function finalizeMove() {
+    const { dir, startCenters, newGrid1, newTilePos1, upgrade } = activeMove;
+    activeMove = null;
+    if (!upgrade) {
+      setTimeout(() => startFallPhase(newGrid1, newTilePos1), ROTATE_PAUSE_MS);
+      return;
+    }
     const sign = dir === 'CW' ? 1 : -1;
-    const fromDeg = handle.currentDeg();
-    handle.cancel();
     const { newGrid, newTilePos } = computeRotation(dir, 2);
     hapticTick(10);
-    const newHandle = tweenArc(startCenters, fromDeg, sign * 120, ROTATE_MS, () => {
-      activeMove = null;
+    tweenArc(startCenters, sign * 60, sign * 120, ROTATE_MS, () => {
       setTimeout(() => startFallPhase(newGrid, newTilePos), ROTATE_PAUSE_MS);
     });
-    activeMove = { dir, startCenters, handle: newHandle };
+  }
+
+  function onPressStart(dir) {
+    if (pressStart[dir] != null) return; // already down - ignore OS key-repeat/duplicate events
+    pressStart[dir] = performance.now();
+    move(dir, true);
+  }
+
+  function onPressEnd(dir) {
+    if (pressStart[dir] == null) return;
+    const heldMs = performance.now() - pressStart[dir];
+    pressStart[dir] = null;
+    if (activeMove && activeMove.dir === dir) {
+      activeMove.released = true;
+      activeMove.upgrade = heldMs >= LONG_PRESS_MS;
+      if (activeMove.tweenDone) finalizeMove();
+    }
   }
 
   applyBoardDimensions();
@@ -1308,13 +1318,29 @@
   });
 
   window.addEventListener('keydown', (e) => {
-    if (e.key === 'ArrowLeft') { e.preventDefault(); move('CCW'); }
-    else if (e.key === 'ArrowRight') { e.preventDefault(); move('CW'); }
+    if (e.key === 'ArrowLeft') { e.preventDefault(); onPressStart('CCW'); }
+    else if (e.key === 'ArrowRight') { e.preventDefault(); onPressStart('CW'); }
+  });
+  window.addEventListener('keyup', (e) => {
+    if (e.key === 'ArrowLeft') onPressEnd('CCW');
+    else if (e.key === 'ArrowRight') onPressEnd('CW');
   });
 
   rotateControlsEl.addEventListener('pointerdown', (e) => e.stopPropagation());
-  rotateCcwBtn.addEventListener('click', () => move('CCW'));
-  rotateCwBtn.addEventListener('click', () => move('CW'));
+  // Pointer capture keeps pointerup/pointercancel targeting the button even
+  // if the pointer drifts off it before releasing, so a hold's release is
+  // never missed just because the finger/cursor moved slightly.
+  function wireHoldButton(btn, dir) {
+    btn.addEventListener('pointerdown', (e) => {
+      e.preventDefault();
+      onPressStart(dir);
+      try { btn.setPointerCapture(e.pointerId); } catch (err) {}
+    });
+    btn.addEventListener('pointerup', () => onPressEnd(dir));
+    btn.addEventListener('pointercancel', () => onPressEnd(dir));
+  }
+  wireHoldButton(rotateCcwBtn, 'CCW');
+  wireHoldButton(rotateCwBtn, 'CW');
 
   // Stage 1, live-drag path: swipe anywhere in the centered area (including
   // the blank margin around the board), in *any* direction, not just
@@ -1416,7 +1442,7 @@
       // instead: fire it now if the board just freed up, or queue it if it's
       // still busy.
       if (rotating) queuedMove = dir;
-      else move(dir);
+      else move(dir, false);
       return;
     }
 
