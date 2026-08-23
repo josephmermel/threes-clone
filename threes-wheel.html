@@ -1224,17 +1224,14 @@
     move(dir, false); // no press is currently in progress to wait on - just a plain 60
   }
 
-  // A button/keyboard rotation always starts as a plain 60-degree turn, but
-  // doesn't hand off to stage 2 the instant that turn finishes animating -
-  // it waits at 60 for the actual release (see onPressEnd/finalizeMove)
-  // before deciding whether to continue on to 120. A tap-and-release well
-  // under LONG_PRESS_MS settles for 60 (as soon as the animation itself
-  // catches up, if it hasn't already); holding past it and *then* releasing
-  // continues the spin from wherever it's sitting on to 120 instead. Both
-  // the tween finishing and the button/key being released have to have
-  // happened before a move is finalized - whichever comes second is what
-  // actually triggers it.
-  let activeMove = null; // { dir, startCenters, newGrid1, newTilePos1, tweenDone, released, upgrade }
+  // A button/keyboard rotation always starts as a plain 60-degree turn. If
+  // the press is still down LONG_PRESS_MS later, the second 60 degrees
+  // (on to 120) plays automatically right then - while still held - so
+  // holding long enough is confirmed visually instead of being a guess.
+  // Releasing never itself changes how far the wheel has turned; it just
+  // hands off to stage 2 (the fall) from wherever the rotation has landed,
+  // once that rotation has actually finished animating.
+  let activeMove = null; // { dir, startCenters, newGrid1, newTilePos1, newGrid2, newTilePos2, tweenDone, released, upgraded, upgradeTimer }
   const LONG_PRESS_MS = 300;
   // Independent per direction (not just "the one thing currently held") so a
   // stray overlapping press/hold of the *other* direction - e.g. a key held
@@ -1244,14 +1241,14 @@
 
   // Stage 1, instant path (button/keyboard): animate 60 degrees at
   // ROTATE_MS, then - after the small settling pause - hand off to stage 2.
-  // `live` distinguishes an actual press (waits for onPressEnd's release
-  // verdict before finalizing - see beginRotation) from a queued move being
-  // consumed once the board frees up (no press is currently in progress to
-  // wait on, so it just settles for a plain 60 as soon as the tween's done).
-  // The drag path below does the live-press equivalent but lets the player
-  // control progress through stage 1 directly instead of jumping straight to
-  // done. If the board is already busy, the direction is queued instead of
-  // dropped - see queuedMove/consumeQueuedMove.
+  // `live` distinguishes an actual press (arms the long-press upgrade timer
+  // and waits for onPressEnd's release before finalizing - see beginRotation)
+  // from a queued move being consumed once the board frees up (no press is
+  // currently in progress to time, so it just settles for a plain 60 as soon
+  // as the tween's done). The drag path below does the live-press equivalent
+  // but lets the player control progress through stage 1 directly instead of
+  // jumping straight to done. If the board is already busy, the direction is
+  // queued instead of dropped - see queuedMove/consumeQueuedMove.
   function move(dir, live) {
     if (!overlayEl.classList.contains('hidden')) return;
     if (rotating || drag) { queuedMove = dir; return; }
@@ -1263,47 +1260,70 @@
   function beginRotation(dir, live) {
     const sign = dir === 'CW' ? 1 : -1;
     const { newGrid: newGrid1, newTilePos: newTilePos1, startCenters } = computeRotation(dir, 1);
-    activeMove = { dir, startCenters, newGrid1, newTilePos1, tweenDone: false, released: !live, upgrade: false };
+    activeMove = {
+      dir, startCenters, newGrid1, newTilePos1,
+      tweenDone: false, released: !live, upgraded: false, upgradeTimer: null,
+    };
+    if (live) {
+      // ROTATE_MS (the full stage-1 tween) is well under LONG_PRESS_MS, so by
+      // the time this fires the 60-degree tween has always already landed -
+      // safe to jump straight into the second half of the spin.
+      activeMove.upgradeTimer = setTimeout(() => {
+        if (activeMove && activeMove.dir === dir) beginUpgrade();
+      }, LONG_PRESS_MS);
+    }
     tweenArc(startCenters, 0, sign * 60, ROTATE_MS, () => {
-      if (!activeMove || activeMove.dir !== dir) return; // safety - shouldn't happen, but never act on a stale tween
+      if (!activeMove || activeMove.dir !== dir || activeMove.upgraded) return; // safety - shouldn't happen, but never act on a stale/superseded tween
       activeMove.tweenDone = true;
-      if (activeMove.released) finalizeMove();
+      maybeFinalize();
     });
   }
 
-  // Called once both the 60-degree tween has visually finished *and* the
-  // press has been released (in whichever order those happen to occur) -
-  // either continues on to 120 (see the comment on LONG_PRESS_MS above) or
-  // hands off to stage 2 right where it's sitting.
-  function finalizeMove() {
-    const { dir, startCenters, newGrid1, newTilePos1, upgrade } = activeMove;
-    activeMove = null;
-    if (!upgrade) {
-      setTimeout(() => startFallPhase(newGrid1, newTilePos1), ROTATE_PAUSE_MS);
-      return;
-    }
+  // Fired automatically once a live press has been held past LONG_PRESS_MS -
+  // continues the spin on to 120 right away, regardless of whether the press
+  // is still down; onPressEnd/maybeFinalize just wait for it to land.
+  function beginUpgrade() {
+    const { dir, startCenters } = activeMove;
+    activeMove.upgraded = true;
+    activeMove.upgradeTimer = null;
+    activeMove.tweenDone = false;
     const sign = dir === 'CW' ? 1 : -1;
-    const { newGrid, newTilePos } = computeRotation(dir, 2);
+    const { newGrid: newGrid2, newTilePos: newTilePos2 } = computeRotation(dir, 2);
+    activeMove.newGrid2 = newGrid2;
+    activeMove.newTilePos2 = newTilePos2;
     hapticTick(10);
     tweenArc(startCenters, sign * 60, sign * 120, ROTATE_MS, () => {
-      setTimeout(() => startFallPhase(newGrid, newTilePos), ROTATE_PAUSE_MS);
+      if (!activeMove || activeMove.dir !== dir) return;
+      activeMove.tweenDone = true;
+      maybeFinalize();
     });
+  }
+
+  // Called once both the current tween has visually finished *and* the press
+  // has been released (in whichever order those happen to occur) - hands off
+  // to stage 2 (the fall) from wherever the rotation ended up landing.
+  function maybeFinalize() {
+    if (!activeMove || !activeMove.tweenDone || !activeMove.released) return;
+    const { upgraded, newGrid1, newTilePos1, newGrid2, newTilePos2 } = activeMove;
+    const newGrid = upgraded ? newGrid2 : newGrid1;
+    const newTilePos = upgraded ? newTilePos2 : newTilePos1;
+    activeMove = null;
+    setTimeout(() => startFallPhase(newGrid, newTilePos), ROTATE_PAUSE_MS);
   }
 
   function onPressStart(dir) {
     if (pressStart[dir] != null) return; // already down - ignore OS key-repeat/duplicate events
-    pressStart[dir] = performance.now();
+    pressStart[dir] = true;
     move(dir, true);
   }
 
   function onPressEnd(dir) {
     if (pressStart[dir] == null) return;
-    const heldMs = performance.now() - pressStart[dir];
     pressStart[dir] = null;
     if (activeMove && activeMove.dir === dir) {
+      if (activeMove.upgradeTimer) { clearTimeout(activeMove.upgradeTimer); activeMove.upgradeTimer = null; }
       activeMove.released = true;
-      activeMove.upgrade = heldMs >= LONG_PRESS_MS;
-      if (activeMove.tweenDone) finalizeMove();
+      maybeFinalize();
     }
   }
 
