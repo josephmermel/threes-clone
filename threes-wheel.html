@@ -820,14 +820,23 @@
   // wheel-only tile, unlike the wildcard, so it isn't taught to the shared
   // helper - see canMergeWheel above for the same reasoning applied to
   // merging).
+  // A flat, two-tone schematic (solid circle body, straight fuse, diamond
+  // spark) rather than a glossy pictorial glyph - the wheel variant's tiles
+  // are all flat fills/clip-paths, so a shaded/gradient emoji stood out as
+  // the one "3D" element on the board.
+  const BOMB_ICON_SVG = `
+    <svg viewBox="0 0 64 64" width="60%" height="60%" xmlns="http://www.w3.org/2000/svg">
+      <circle cx="29" cy="38" r="19" fill="#2b2b2b"/>
+      <line x1="29" y1="19" x2="40" y2="8" stroke="#2b2b2b" stroke-width="4" stroke-linecap="round"/>
+      <rect x="37.5" y="1.5" width="9" height="9" fill="#ffb020" transform="rotate(45 42 6)"/>
+    </svg>`;
   function paintTileWheel(el, value) {
     if (value === BOMB) {
       el.classList.remove('wild');
       el.classList.add('bomb');
       el.style.background = '';
-      el.style.color = '#fff8ec';
       el.style.fontSize = '32px';
-      el.textContent = '💣';
+      el.innerHTML = BOMB_ICON_SVG;
       return;
     }
     el.classList.remove('bomb');
