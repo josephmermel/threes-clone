@@ -53,6 +53,32 @@
     background: var(--cell-bg);
     filter: drop-shadow(0 0 1px var(--cell-border));
   }
+  /* Perf fork (wheel-only - see makeTileEl/animateMoveWheel in the script
+     below for the full story): every tile is really two nested elements now.
+     .tile-pos is the actual positioned box - transform-only, GPU-composited,
+     never triggers layout the way left/top does - and the inner .tile keeps
+     its existing look and its own scale/rotate keyframes (merge-pop,
+     milestone-pop, wildcard flips), which still use `transform` too, just
+     for scale/rotation rather than position. Splitting position onto a
+     separate ancestor is what lets both live in `transform` at once without
+     fighting over the property on one element. */
+  .tile-pos {
+    position: absolute;
+    left: 0;
+    top: 0;
+  }
+  .tile-pos > .tile {
+    position: absolute;
+    left: 0;
+    top: 0;
+    /* left/top themselves never change now (position lives on .tile-pos'
+       transform instead) - narrowed from the shared .tile rule's transition
+       (which still includes left/top, harmless but pointless here) down to
+       just what can actually change on this element: opacity/transform for
+       a loser's delayed fade-and-shrink, set directly (not via a class) in
+       animateMoveWheel. */
+    transition: opacity 0.08s ease, transform 0.08s ease;
+  }
   .tile {
     width: 74px;
     height: 64px;
@@ -60,7 +86,13 @@
     font-size: 24px;
     border: none;
     box-shadow: none;
-    filter: drop-shadow(0 4px 5px rgba(0,0,0,0.4)) drop-shadow(0 0 1.5px rgba(0,0,0,0.45));
+    /* One drop-shadow instead of the two stacked ones this used to have -
+       drop-shadow is one of the more expensive CSS filters (unlike
+       box-shadow, it rasterizes against the actual clipped hex alpha shape,
+       not just the bounding box), and stacking two roughly doubled that cost
+       per tile per frame - a real contributor to mobile lag during a
+       many-tiles-animating cascade. */
+    filter: drop-shadow(0 3px 4px rgba(0,0,0,0.45));
   }
   .tile.wild {
     border: none;
@@ -153,7 +185,7 @@
   const {
     WILD, canMerge, mergeValue, partnerValue, pickRandom, cellKey, parseKey,
     currentMaxValue, boardScore,
-    paintTile, paintNumeral, renderNextIndicator, updatePageBackground, animateMove,
+    paintTile, paintNumeral, renderNextIndicator, updatePageBackground,
     attachFullscreenToggle, attachDropdownMenu,
   } = ThreesCommon;
 
@@ -173,10 +205,10 @@
   // (3) gravity - slowed way down from the other variants' snap-into-place
   // speed, so tiles visibly travel and merge, not teleport, before finally
   // (4) the new tile appears (that one stays quick - it's just arriving, not
-  // traveling far). Stage 2's travel goes through the same el.style.left/top +
-  // CSS transition mechanism as the other variants, just with the duration set
-  // inline (setTileTransition below) instead of relying on threes-common.css's
-  // one shared speed. Stage 1 (rotation) *can't* use a CSS transition at all -
+  // traveling far). Stage 2's travel is a CSS transition on each tile's
+  // .tile-pos wrapper `transform` (see the CSS comment above .tile-pos), with
+  // the duration set inline (setTilePosTransition below) instead of relying
+  // on one shared speed. Stage 1 (rotation) *can't* use a CSS transition at all -
   // see the tweenArc/rotatePoint comment below for why - so it's driven by a
   // small requestAnimationFrame loop instead.
   const ROTATE_MS = 160;      // stage 1: full button/keyboard rotation
@@ -485,46 +517,44 @@
     return CELL_PIXEL[cellKey(q, r)];
   }
 
-  // Overrides threes-common.css's one shared left/top transition speed with an
-  // exact per-call duration (inline styles win over the stylesheet), so each
-  // stage's travel can be timed independently. animateMove (shared with the
-  // other variants) has no duration parameter of its own - it just writes
-  // style.left/top - so setting this right before calling it is what actually
-  // controls stage 2's pace.
-  function setTileTransition(el, ms) {
-    el.style.transition = `left ${ms}ms cubic-bezier(.32,.72,.35,1), top ${ms}ms cubic-bezier(.32,.72,.35,1), opacity 0.08s ease, transform 0.08s ease`;
+  // Sets a tile's position-only transition duration for this fall (inline
+  // styles win over the stylesheet, so each stage's travel can be timed
+  // independently). Applies to the .tile-pos wrapper now, not the tile
+  // itself - see makeTileEl/animateMoveWheel - since position lives entirely
+  // in that wrapper's `transform`.
+  function setTilePosTransition(wrap, ms) {
+    wrap.style.transition = `transform ${ms}ms cubic-bezier(.32,.72,.35,1)`;
   }
 
-  // animateMove sets a merge loser's left/top (sliding it the rest of the way
-  // into the winner) and its opacity/transform (the fade-out) in the very same
-  // tick. At the other variants' matched slide/fade speed that's invisible,
-  // but stage 2's slide is now much longer than its 80ms fade default - fading
-  // out in 80ms while still sliding for 280ms meant losers visually vanished
-  // well before they'd traveled anywhere close to the winner, instead of
-  // appearing to fall into it. Delaying the (still-quick) fade so it only
-  // plays during the tail end of the slide - via transition-delay, since
-  // animateMove sets the style properties immediately either way - makes it
-  // read as "arrives, then gets absorbed" instead of "vanishes mid-air". The
-  // same fix covers a wildcard loser's card-flip-reveal, which is a CSS
+  // animateMoveWheel sets a merge loser's position (sliding it the rest of
+  // the way into the winner, on the wrapper) and its opacity/scale (the
+  // fade-out, on the inner face) in the very same tick. At the other
+  // variants' matched slide/fade speed that's invisible, but stage 2's slide
+  // is now much longer than its 80ms fade default - fading out in 80ms while
+  // still sliding for 280ms meant losers visually vanished well before
+  // they'd traveled anywhere close to the winner, instead of appearing to
+  // fall into it. Delaying the (still-quick) fade so it only plays during
+  // the tail end of the slide - via transition-delay - makes it read as
+  // "arrives, then gets absorbed" instead of "vanishes mid-air". The same
+  // fix covers a wildcard loser's card-flip-reveal, which is a CSS
   // *animation* rather than a transition, via animation-delay instead.
+  // Applies to the inner face, unlike setTilePosTransition above - the
+  // wrapper's own position transition (set separately, on every tile) is
+  // untouched by any of this.
   const LOSER_EFFECT_MS = 90;
-  function setFallTileTransition(el, ms, isLoser) {
-    if (!isLoser) {
-      setTileTransition(el, ms);
-      return;
-    }
+  function setLoserFaceTransition(face, ms) {
     const delay = Math.max(0, ms - LOSER_EFFECT_MS);
-    el.style.transition = `left ${ms}ms cubic-bezier(.32,.72,.35,1), top ${ms}ms cubic-bezier(.32,.72,.35,1), opacity ${LOSER_EFFECT_MS}ms ease ${delay}ms, transform ${LOSER_EFFECT_MS}ms ease ${delay}ms`;
-    el.style.animationDelay = delay + 'ms';
+    face.style.transition = `opacity ${LOSER_EFFECT_MS}ms ease ${delay}ms, transform ${LOSER_EFFECT_MS}ms ease ${delay}ms`;
+    face.style.animationDelay = delay + 'ms';
   }
 
-  // Stage 1 can't be a plain el.style.left/top CSS transition the way stage 2
-  // is: a transition only interpolates *linearly* between the start and end
+  // Stage 1 can't be a plain CSS transform transition the way stage 2 is: a
+  // transition only interpolates *linearly* between the start and end
   // values, but two points on a circle joined by a straight line cut inside
   // the circle - every tile would visibly bunch in toward the center mid-turn
-  // instead of sweeping around it. There's no CSS-only fix for that on a plain
-  // left/top-positioned element (no curved-path transition exists for this),
-  // so stage 1 is driven by its own requestAnimationFrame loop instead,
+  // instead of sweeping around it. There's no CSS-only fix for that (no
+  // curved-path transition exists), so stage 1 is driven by its own
+  // requestAnimationFrame loop instead,
   // computing a true rotation (constant radius, changing angle) every frame.
   //
   // Rotates point (px,py) by `deg` degrees around (cx,cy). In screen
@@ -561,8 +591,7 @@
       const deg = fromDeg + (toDeg - fromDeg) * easeOutCubic(raw);
       for (const { el, cx, cy } of items) {
         const p = rotatePoint(cx, cy, bcx, bcy, deg);
-        el.style.left = (p.x - HEX_W / 2) + 'px';
-        el.style.top = (p.y - HEX_H / 2) + 'px';
+        el.style.transform = `translate(${p.x - HEX_W / 2}px, ${p.y - HEX_H / 2}px)`;
       }
       if (raw < 1) requestAnimationFrame(frame);
       else if (onDone) onDone();
@@ -637,7 +666,16 @@
   function paintTileScaled(el, value) { paintTile(el, value); scaleFont(el); }
   function paintNumeralScaled(el, value) { paintNumeral(el, value); scaleFont(el); }
 
+  // Every tile is a .tile-pos wrapper (transform-positioned) around an inner
+  // .tile "face" (the existing look, unchanged) - see the CSS comment above
+  // .tile-pos for why. elById tracks the wrapper (it's what gets appended to
+  // and removed from the board); faceOf() reaches the paintable/animatable
+  // inner element wherever code needs it.
+  function faceOf(wrap) { return wrap.firstElementChild; }
+
   function makeTileEl(value, q, r, spawning) {
+    const wrap = document.createElement('div');
+    wrap.className = 'tile-pos';
     const el = document.createElement('div');
     el.className = 'tile hex-shape' + (spawning ? ' spawning' : '');
     // Drop the class once its one-shot fade-in finishes, so a tile that's been
@@ -648,10 +686,10 @@
     paintTileScaled(el, value);
     el.style.width = HEX_W + 'px';
     el.style.height = HEX_H + 'px';
+    wrap.appendChild(el);
     const { left, top } = cellPos(q, r);
-    el.style.left = left + 'px';
-    el.style.top = top + 'px';
-    return el;
+    wrap.style.transform = `translate(${left}px, ${top}px)`;
+    return wrap;
   }
 
   let cellBgEls = [];
@@ -664,14 +702,133 @@
       el.style.top = top + 'px';
     }
     if (!elById) return;
-    for (const [id, el] of elById) {
-      el.style.width = HEX_W + 'px';
-      el.style.height = HEX_H + 'px';
-      paintTileScaled(el, tileValue[id]);
+    for (const [id, wrap] of elById) {
+      const face = faceOf(wrap);
+      face.style.width = HEX_W + 'px';
+      face.style.height = HEX_H + 'px';
+      paintTileScaled(face, tileValue[id]);
       const [q, r] = tilePos[id];
       const { left, top } = cellPos(q, r);
-      el.style.left = left + 'px';
-      el.style.top = top + 'px';
+      wrap.style.transform = `translate(${left}px, ${top}px)`;
+    }
+  }
+
+  // Wheel-local fork of the glow burst ThreesCommon's spawnMilestoneGlow adds
+  // behind a tile that just set a new record - reused unchanged (same CSS
+  // class/keyframe), just positioned by copying the tile-pos wrapper's own
+  // transform instead of reading tileEl.style.left/top (which no longer
+  // exist here - see makeTileEl above).
+  function spawnMilestoneGlowWheel(wrap, boardEl) {
+    const face = faceOf(wrap);
+    const glow = document.createElement('div');
+    glow.className = 'milestone-glow';
+    glow.style.left = '0';
+    glow.style.top = '0';
+    glow.style.transform = wrap.style.transform;
+    glow.style.width = face.style.width;
+    glow.style.height = face.style.height;
+    boardEl.appendChild(glow);
+    setTimeout(() => glow.remove(), 650);
+  }
+
+  // Wheel-local fork of ThreesCommon's animateMove: identical behavior and
+  // timing (losers slide into their winner's cell and fade/flip away,
+  // survivors glide to their new cell and pop/flip, and only once all of
+  // that has settled does the spawned tile slide in), but every position
+  // change targets a tile's .tile-pos wrapper (transform) instead of the
+  // tile itself (left/top) - see the CSS comment above .tile-pos, and
+  // makeTileEl, for why. Not a change to the shared animateMove: this board's
+  // whole-wheel rotate + cascading-fall animation puts far more tiles in
+  // motion at once than the other variants' single-step slides ever do,
+  // which is what made the left/top layout-trigger cost (compounded by this
+  // board's stacked drop-shadow + clip-path tiles) noticeable on mobile.
+  function animateMoveWheel(ctx) {
+    const {
+      elById, tileValue, tilePos, allMerges, loserFinalPos, spawnedId,
+      boardEl, cellPos, createTileEl, milestoneIds, spawnEnterFrom,
+      slideMs, winnerFlipMs, loserFlipMs, spawnSlideMs,
+    } = ctx;
+    const winnerMeta = new Map(allMerges.map(m => [m.winnerId, m]));
+
+    // Losers slide into the winner's final spot, then fade out (or flip-reveal first).
+    for (const m of allMerges) {
+      const { loserId, loserWasWild, revealValue } = m;
+      const wrap = elById.get(loserId);
+      if (!wrap) continue;
+      const face = faceOf(wrap);
+      const [a, b] = loserFinalPos[loserId];
+      const { left, top } = cellPos(a, b);
+      wrap.style.zIndex = '1';
+      wrap.style.transform = `translate(${left}px, ${top}px)`;
+
+      if (loserWasWild) {
+        face.classList.add('wild-loser-flip');
+        setTimeout(() => paintNumeralScaled(face, revealValue), Math.round(loserFlipMs * 0.5));
+      } else {
+        face.style.opacity = '0';
+        face.style.transform = 'scale(0.4)';
+      }
+      setTimeout(() => {
+        wrap.remove();
+        elById.delete(loserId);
+      }, loserFlipMs);
+    }
+
+    // Survivors (including merge winners) glide to their new cell.
+    for (const idStr in tilePos) {
+      const id = Number(idStr);
+      if (id === spawnedId) continue;
+      const wrap = elById.get(id);
+      if (!wrap) continue;
+      const face = faceOf(wrap);
+      const [a, b] = tilePos[id];
+      const { left, top } = cellPos(a, b);
+      wrap.style.transform = `translate(${left}px, ${top}px)`;
+
+      const meta = winnerMeta.get(id);
+      if (meta && meta.winnerWasWild) {
+        // Card-flip from wildcard to the resulting number as the merge lands.
+        setTimeout(() => {
+          face.classList.remove('merging');
+          face.classList.add('wild-winner-flip');
+          setTimeout(() => paintTileScaled(face, meta.newValue), Math.round(winnerFlipMs * 0.5));
+          setTimeout(() => face.classList.remove('wild-winner-flip'), winnerFlipMs);
+        }, slideMs);
+      } else if (meta) {
+        const value = tileValue[id];
+        const isMilestone = milestoneIds && milestoneIds.has(id);
+        setTimeout(() => {
+          paintTileScaled(face, value);
+          face.classList.remove('merging', 'milestone-pop');
+          void face.offsetWidth;
+          face.classList.add(isMilestone ? 'milestone-pop' : 'merging');
+          if (isMilestone) spawnMilestoneGlowWheel(wrap, boardEl);
+        }, slideMs);
+      }
+    }
+
+    // Only after the slide (and any merge fallout) has fully played does the new
+    // tile appear, sliding in from just beyond the edge in the swipe's direction.
+    if (spawnedId != null) {
+      const spawnDelay = allMerges.length > 0 ? slideMs + winnerFlipMs : slideMs;
+      setTimeout(() => {
+        const [a, b] = tilePos[spawnedId];
+        const wrap = createTileEl(tileValue[spawnedId], a, b, false);
+        if (spawnEnterFrom) {
+          const finalTransform = wrap.style.transform;
+          wrap.style.transition = 'none';
+          wrap.style.transform = `translate(${spawnEnterFrom.left}px, ${spawnEnterFrom.top}px)`;
+          boardEl.appendChild(wrap);
+          void wrap.offsetWidth; // force layout so the jump above isn't itself animated
+          wrap.style.transition = spawnSlideMs != null
+            ? `transform ${spawnSlideMs}ms cubic-bezier(.32,.72,.35,1)`
+            : '';
+          wrap.style.transform = finalTransform;
+        } else {
+          boardEl.appendChild(wrap);
+        }
+        elById.set(spawnedId, wrap);
+      }, spawnDelay);
     }
   }
 
@@ -821,14 +978,18 @@
     if (fallResult.allMerges.length > 0) hapticTick(milestoneIds && milestoneIds.size > 0 ? [15, 40, 15] : 20);
 
     // Stage 2's travel speed: applied to every tile currently on the board
-    // (not the not-yet-created spawn) right before animateMove moves any of
-    // them, since it has no duration knob of its own - see setTileTransition.
-    // Losers get the delayed-fade variant so they visibly fall the whole way
-    // before disappearing, rather than fading out mid-fall.
+    // (not the not-yet-created spawn) right before animateMoveWheel moves any
+    // of them, since it has no duration knob of its own - see
+    // setTilePosTransition. Losers additionally get the delayed fade/shrink
+    // on their inner face so they visibly fall the whole way before
+    // disappearing, rather than fading out mid-fall.
     const loserIds = new Set(fallResult.allMerges.map(m => m.loserId));
-    for (const [id, el] of elById) setFallTileTransition(el, FALL_MS, loserIds.has(id));
+    for (const [id, wrap] of elById) {
+      setTilePosTransition(wrap, FALL_MS);
+      if (loserIds.has(id)) setLoserFaceTransition(faceOf(wrap), FALL_MS);
+    }
 
-    animateMove({
+    animateMoveWheel({
       elById, tileValue, tilePos, allMerges: fallResult.allMerges, loserFinalPos, spawnedId,
       boardEl, cellPos, createTileEl: makeTileEl, milestoneIds, spawnEnterFrom,
       slideMs: FALL_MS, winnerFlipMs: WINNER_FLIP_MS, loserFlipMs: LOSER_FLIP_MS,
@@ -837,7 +998,6 @@
       // (unlike the other variants' fixed one-pitch spawn hop), so a fixed
       // short transition would look like a snap rather than a fall.
       spawnSlideMs: FALL_MS,
-      paintTile: paintTileScaled, paintNumeral: paintNumeralScaled,
     });
     renderNextIndicator(nextIndicatorEl, nextValue, TRIPLE_HINT_CHANCE);
     updatePageBackground(highestMatchValue);
@@ -941,8 +1101,7 @@
       const el = elById.get(id);
       if (!el) continue;
       const p = rotatePoint(cx, cy, bcx, bcy, deg);
-      el.style.left = (p.x - HEX_W / 2) + 'px';
-      el.style.top = (p.y - HEX_H / 2) + 'px';
+      el.style.transform = `translate(${p.x - HEX_W / 2}px, ${p.y - HEX_H / 2}px)`;
     }
   }
 
