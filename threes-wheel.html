@@ -229,13 +229,19 @@
   // of the way there. Only a real backtrack - dragging past the start point,
   // back toward/beyond zero, before releasing - cancels it.
   const DRAG_ANGLE_DEADZONE = 6;   // degrees of slop before a direction is even chosen
-  // Amplifies the live drag's rotation relative to the finger's actual angle
-  // swept - since this phase has no easing curve (it's a direct 1:1 readout of
-  // real finger motion, unlike the button/keyboard's easeOutCubic tween), a
-  // higher multiplier is what makes a swipe's naturally slow first ~50-100ms
-  // (a finger overcoming its own inertia) still produce a visible amount of
-  // rotation right away, rather than reading as a hesitant start.
-  const DRAG_SENSITIVITY = 2.4;    // rotation progress moves this many degrees per degree swept
+  // The live drag maps physical swipe angle to rotation through the *same*
+  // easeOutCubic curve the button/keyboard tween uses (steepest right at the
+  // start, flattening out), rather than a flat multiplier - a flat multiplier
+  // still reads as hesitant because a real swipe's first ~50-100ms (a finger
+  // overcoming its own inertia) is genuinely slow, so scaling it by a
+  // constant just produces a smaller slow motion, not a *fast-feeling* one.
+  // Feeding it through the same front-loaded curve the button already uses
+  // is what actually makes the two feel alike: a small initial finger move
+  // already produces a disproportionately large rotation, exactly like the
+  // button's animation does in time instead of in physical distance.
+  // DRAG_EASE_RANGE is the physical swipe angle (degrees) that maps to a
+  // full 60-degree turn; past it, progress just clamps at 60.
+  const DRAG_EASE_RANGE = 36;
   const DRAG_SNAP_MS = 120;        // stage 1: finishing (or undoing) a released drag
 
   // A touch-capable device can already rotate the wheel by swiping, so the
@@ -720,15 +726,30 @@
   // exist here - see makeTileEl above).
   function spawnMilestoneGlowWheel(wrap, boardEl) {
     const face = faceOf(wrap);
+    // .milestone-glow's own burst is a CSS *animation* on `transform` (a
+    // scale from 0.7 to 2.4) - exactly like a tile's merge-pop, a running
+    // animation on transform completely overrides a plain inline
+    // `transform: translate()`, for its whole 0.6s run, not just blend with
+    // it. Set the translate directly on .milestone-glow (as an earlier
+    // version of this did) and the glow renders at whatever `scale()` alone
+    // resolves to - no translate at all - i.e. pinned to this wrapper's
+    // left:0/top:0, the board's top-left corner. Same fix as the tiles: a
+    // position-only wrapper around the unmodified, shared .milestone-glow,
+    // which keeps just the scale/opacity burst.
+    const glowPos = document.createElement('div');
+    glowPos.style.position = 'absolute';
+    glowPos.style.left = '0';
+    glowPos.style.top = '0';
+    glowPos.style.transform = wrap.style.transform;
     const glow = document.createElement('div');
     glow.className = 'milestone-glow';
     glow.style.left = '0';
     glow.style.top = '0';
-    glow.style.transform = wrap.style.transform;
     glow.style.width = face.style.width;
     glow.style.height = face.style.height;
-    boardEl.appendChild(glow);
-    setTimeout(() => glow.remove(), 650);
+    glowPos.appendChild(glow);
+    boardEl.appendChild(glowPos);
+    setTimeout(() => glowPos.remove(), 650);
   }
 
   // Wheel-local fork of ThreesCommon's animateMove: identical behavior and
@@ -1140,9 +1161,9 @@
 
     if (!drag.startCenters) return; // board was busy when the deadzone was crossed
     const sign = drag.dir === 'CW' ? 1 : -1;
-    const progress = Math.max(0, Math.min(60, sign * delta * DRAG_SENSITIVITY));
-    drag.t = progress / 60;
-    applyDragAngle(sign * progress);
+    const rawT = Math.max(0, Math.min(1, (sign * delta) / DRAG_EASE_RANGE));
+    drag.t = easeOutCubic(rawT);
+    applyDragAngle(sign * 60 * drag.t);
   });
 
   function finishDrag() {
