@@ -101,6 +101,13 @@
             drop-shadow(0 2px 3px rgba(0,0,0,0.25))
             drop-shadow(0 0 1px rgba(255,255,255,0.6));
   }
+  .tile.bomb {
+    border: none;
+    box-shadow: none;
+    filter: drop-shadow(0 0 6px rgba(200,40,20,0.65))
+            drop-shadow(0 2px 3px rgba(0,0,0,0.25))
+            drop-shadow(0 0 1px rgba(255,255,255,0.5));
+  }
 
   /* Two big rotate buttons sit just outside the board's flat left/right edges
      (siblings of #board, positioned in JS from the board's current pixel size,
@@ -184,8 +191,8 @@
 (function () {
   const {
     WILD, canMerge, mergeValue, partnerValue, pickRandom, cellKey, parseKey,
-    currentMaxValue, boardScore,
-    paintTile, paintNumeral, renderNextIndicator, updatePageBackground,
+    currentMaxValue, scoreForValue, triplesContaining,
+    paintTile, paintNumeral, miniFontSize, updatePageBackground,
     attachFullscreenToggle, attachDropdownMenu,
   } = ThreesCommon;
 
@@ -217,6 +224,13 @@
   const WINNER_FLIP_MS = 220;  // stage 2: a merge winner's pop/flip, once it lands
   const LOSER_FLIP_MS = FALL_MS + 60; // comfortable margin past the delayed fade's own completion
   const WILDCARD_CHANCE = 0.05;
+  // A bomb detonates whatever rank it lands on/next to - see canMergeWheel,
+  // findBombDetonation, and resolveBombDetonations below - rather than
+  // merging into a new value the way every other tile (including the
+  // wildcard) does.
+  const BOMB = 'B';
+  const BOMB_CHANCE = 0.05;
+  const BOMB_POP_MS = 220; // detonation fade/pop, before the gap-closing slide
   const TRIPLE_HINT_CHANCE = 0.6;
   const STARTER_FILL_RATIO = 0.4;
 
@@ -361,6 +375,19 @@
   function rotateCW(q, r) { return [-r, q + r]; }
   function rotateCCW(q, r) { return [q + r, -q]; }
 
+  // Bomb never merges through the normal system - even against a wildcard,
+  // which the shared canMerge would otherwise treat as "matches anything"
+  // (a bomb-vs-wildcard pair would fall through to canMerge's own
+  // WILD-completes-any-match branch and get merged into a nonsense value
+  // like "BB" if this guard weren't here). It only ever resolves via
+  // detonation - see findBombDetonation/resolveBombDetonations below - so it
+  // just sits inert (a solid obstacle gravity packs around, same as any
+  // other tile) as far as the ordinary merge cascade is concerned.
+  function canMergeWheel(a, b) {
+    if (a === BOMB || b === BOMB) return false;
+    return canMerge(a, b);
+  }
+
   // One slide-and-merge pass: collapses a line toward the wall, merging
   // equal/compatible tiles as they collide. A tile that resulted from a merge
   // this pass can't merge again until the *next* pass - that's what makes it
@@ -372,7 +399,7 @@
     for (const cell of line) {
       if (!cell) continue;
       const top = stack[stack.length - 1];
-      if (top && !top.merged && canMerge(top.value, cell.value)) {
+      if (top && !top.merged && canMergeWheel(top.value, cell.value)) {
         const newValue = mergeValue(top.value, cell.value);
         const winnerWasWild = top.value === WILD;
         const loserWasWild = cell.value === WILD;
@@ -433,6 +460,59 @@
       line.forEach((key, i) => newEntries.push([key, newLine[i] ? newLine[i].id : null]));
     }
     return { anyMoved, allMerges, newEntries };
+  }
+
+  // A resting bomb detonates the instant it has any (numeric) neighbor in
+  // its column. Gravity always packs a column with no gaps, so the very
+  // first tile ever to land next to a bomb - whether that's the bomb itself
+  // falling onto an existing heap, or something later falling into the
+  // otherwise-empty column it was sitting alone in - is its *only* neighbor
+  // at the moment this first becomes true; nothing can already be sandwiched
+  // on its far side without having triggered this on an earlier turn. Only a
+  // plain numeric neighbor counts - a wildcard or another bomb just sits
+  // inertly beside it instead (the spec only ever describes numeric ranks,
+  // and chaining bomb-vs-wildcard has no obvious defined outcome).
+  function findBombDetonation(grid, tileValue) {
+    for (const line of FALL_LINES) {
+      const ids = line.map(key => grid.get(key)).filter(id => id != null);
+      for (let i = 0; i < ids.length; i++) {
+        if (tileValue[ids[i]] !== BOMB) continue;
+        const before = ids[i - 1], after = ids[i + 1];
+        if (before != null && typeof tileValue[before] === 'number') return { bombId: ids[i], rank: tileValue[before] };
+        if (after != null && typeof tileValue[after] === 'number') return { bombId: ids[i], rank: tileValue[after] };
+      }
+    }
+    return null;
+  }
+
+  // Removes a detonating bomb and every tile of the rank it matched, then
+  // closes the resulting gaps by packing each column toward the wall - pure
+  // gravity, no further merging (the spec describes tiles "readjusting and
+  // falling", not cascading into new matches). Loops in case clearing a rank
+  // exposes a different bomb to a new match - a rare chain, but cheap to
+  // support once the single case is handled. Mutates grid/tileValue in
+  // place; returns every removedId across the whole chain plus each
+  // individual event (for scoring/animation - see startFallPhase).
+  function resolveBombDetonations(grid, tileValue) {
+    const removedIds = new Set();
+    const events = [];
+    for (;;) {
+      const found = findBombDetonation(grid, tileValue);
+      if (!found) break;
+      const { bombId, rank } = found;
+      const batch = [bombId];
+      for (const id in tileValue) if (tileValue[id] === rank) batch.push(Number(id));
+      for (const id of batch) { delete tileValue[id]; removedIds.add(id); }
+      for (const line of FALL_LINES) {
+        const ids = line.map(key => grid.get(key)).filter(id => id != null && !batch.includes(id));
+        line.forEach((key, i) => {
+          if (ids[i] != null) grid.set(key, ids[i]);
+          else grid.delete(key);
+        });
+      }
+      events.push({ bombId, rank });
+    }
+    return { removedIds, events };
   }
 
   // Each cell's pixel top-left (for a HEX_W x HEX_H box). Flat-top pixel
@@ -652,6 +732,7 @@
   function drawNextValue() {
     const blocked = lastSpawnStreak >= 3 ? lastSpawnValue : null;
     if (blocked !== WILD && Math.random() < WILDCARD_CHANCE) return WILD;
+    if (blocked !== BOMB && Math.random() < BOMB_CHANCE) return BOMB;
     return pickSpawnValue(highestMatchValue, blocked);
   }
 
@@ -689,7 +770,14 @@
       for (let i = 0; i < steps; i++) [q, r] = rotateFn(q, r);
       testGrid.set(cellKey(q, r), id);
     }
-    return resolveFall(testGrid, tileValue).allMerges.length > 0;
+    const fallResult = resolveFall(testGrid, tileValue);
+    if (fallResult.allMerges.length > 0) return true;
+    // A rotation that produces zero ordinary merges can still be the
+    // productive move if it's what finally brings a resting bomb into
+    // contact with a match - that's a real board change too, just not one
+    // resolveFall itself knows how to find.
+    const settledGrid = new Map(fallResult.newEntries.filter(([, id]) => id != null));
+    return findBombDetonation(settledGrid, tileValue) != null;
   }
   function isWheelGameOver() {
     return emptyKeys().length === 0
@@ -700,8 +788,61 @@
   function scaleFont(el) {
     el.style.fontSize = (parseFloat(el.style.fontSize) * SCALE) + 'px';
   }
-  function paintTileScaled(el, value) { paintTile(el, value); scaleFont(el); }
+  // Wheel-local paint wrapper: everything but the bomb goes straight through
+  // to ThreesCommon's paintTile, which has no idea BOMB exists (it's a
+  // wheel-only tile, unlike the wildcard, so it isn't taught to the shared
+  // helper - see canMergeWheel above for the same reasoning applied to
+  // merging).
+  function paintTileWheel(el, value) {
+    if (value === BOMB) {
+      el.classList.remove('wild');
+      el.classList.add('bomb');
+      el.style.background = '';
+      el.style.color = '#fff8ec';
+      el.style.fontSize = '32px';
+      el.textContent = '💣';
+      return;
+    }
+    el.classList.remove('bomb');
+    paintTile(el, value);
+  }
+  function paintTileScaled(el, value) { paintTileWheel(el, value); scaleFont(el); }
   function paintNumeralScaled(el, value) { paintNumeral(el, value); scaleFont(el); }
+
+  function makePreviewTileWheel(value, mini) {
+    const el = document.createElement('div');
+    el.className = 'tile preview' + (mini ? ' mini' : '');
+    paintTileWheel(el, value);
+    if (mini) el.style.fontSize = miniFontSize(value);
+    return el;
+  }
+  // Wheel-local fork of ThreesCommon's renderNextIndicator: identical
+  // behavior, but bomb-aware (nextValue > 3 on the BOMB string would
+  // otherwise coerce to NaN and just happen to fall through safely, but the
+  // fallback path still needs makePreviewTileWheel instead of the shared
+  // paintTile-based one to actually render it).
+  function renderNextIndicatorWheel(containerEl, nextValue, tripleChance) {
+    containerEl.innerHTML = '';
+    let triple = null;
+    if (nextValue !== WILD && nextValue !== BOMB && nextValue > 3 && Math.random() < tripleChance) {
+      triple = pickRandom(triplesContaining(nextValue));
+    }
+    if (triple) {
+      for (const v of triple) containerEl.appendChild(makePreviewTileWheel(v, true));
+    } else {
+      containerEl.appendChild(makePreviewTileWheel(nextValue, false));
+    }
+  }
+
+  // Wheel-local fork of ThreesCommon's boardScore: a bomb scores nothing,
+  // same as a wildcard (scoreForValue itself would choke on a non-numeric,
+  // non-WILD value - see the v < 3 / log2 chain - rather than silently
+  // returning 0 for one it's never been told about).
+  function boardScoreWheel(tv) {
+    let total = 0;
+    for (const id in tv) total += tv[id] === BOMB ? 0 : scoreForValue(tv[id]);
+    return total;
+  }
 
   // Every tile is a .tile-pos wrapper (transform-positioned) around an inner
   // .tile "face" (the existing look, unchanged) - see the CSS comment above
@@ -800,6 +941,15 @@
       boardEl, cellPos, createTileEl, milestoneIds, spawnEnterFrom,
       slideMs, winnerFlipMs, loserFlipMs, spawnSlideMs,
       spawnMerges, spawnLoserFinalPos,
+      // Extra pause before the spawn appears at all, for a bomb detonation
+      // (see resolveBombDetonations) the *rotation's* fall exposed - that
+      // needs to finish (pop, then close its own gaps) before the spawn
+      // zone below is even meaningful, since it can shift which cells are
+      // actually the lowest-empty ones. Optional callback fired once the
+      // spawn side of this turn (its own slide-in, plus its own landing
+      // merge if any) has fully settled - see startFallPhase, which uses it
+      // to time the spawn's own possible detonation.
+      extraSpawnDelayMs = 0, onSpawnSettled,
     } = ctx;
     const winnerMeta = new Map(allMerges.map(m => [m.winnerId, m]));
 
@@ -847,7 +997,11 @@
           setTimeout(() => paintTileScaled(face, meta.newValue), Math.round(winnerFlipMs * 0.5));
           setTimeout(() => face.classList.remove('wild-winner-flip'), winnerFlipMs);
         }, slideMs);
-      } else if (meta) {
+      } else if (meta && tileValue[id] !== undefined) {
+        // A merge winner that a same-turn bomb detonation *also* swept away
+        // (its rank matched what a bomb cleared) is already gone from
+        // tileValue by now - skip the pop-and-repaint entirely for it; its
+        // removal/fade plays separately, via playBombRemovals instead.
         const value = tileValue[id];
         const isMilestone = milestoneIds && milestoneIds.has(id);
         setTimeout(() => {
@@ -863,7 +1017,7 @@
     // Only after the slide (and any merge fallout) has fully played does the new
     // tile appear, sliding in from just beyond the edge in the swipe's direction.
     if (spawnedId != null) {
-      const spawnDelay = allMerges.length > 0 ? slideMs + winnerFlipMs : slideMs;
+      const spawnDelay = (allMerges.length > 0 ? slideMs + winnerFlipMs : slideMs) + extraSpawnDelayMs;
       setTimeout(() => {
         const [a, b] = tilePos[spawnedId];
         // Paint with spawnValue (its value *before* any landing-merge), not
@@ -891,13 +1045,18 @@
         // finished falling in - same collapse rule as a rotation's fall,
         // just triggered by the spawn instead of a rotation (see
         // startFallPhase). Skipped entirely if it didn't land on a match.
+        const mergeDelay = spawnEnterFrom ? (spawnSlideMs != null ? spawnSlideMs : 0) : 0;
         if (spawnMerges && spawnMerges.length > 0) {
-          const mergeDelay = spawnEnterFrom ? (spawnSlideMs != null ? spawnSlideMs : 0) : 0;
           setTimeout(() => {
             playMergeEvents(spawnMerges, spawnLoserFinalPos, tileValue, milestoneIds, boardEl);
+            if (onSpawnSettled) setTimeout(onSpawnSettled, winnerFlipMs);
           }, mergeDelay);
+        } else if (onSpawnSettled) {
+          setTimeout(onSpawnSettled, mergeDelay);
         }
       }, spawnDelay);
+    } else if (onSpawnSettled) {
+      onSpawnSettled();
     }
   }
 
@@ -953,7 +1112,11 @@
         face.classList.add('wild-winner-flip');
         setTimeout(() => paintTileScaled(face, m.newValue), Math.round(WINNER_FLIP_MS * 0.5));
         setTimeout(() => face.classList.remove('wild-winner-flip'), WINNER_FLIP_MS);
-      } else {
+      } else if (tileValue[winnerId] !== undefined) {
+        // Same guard as animateMoveWheel's survivor repaint: a winner whose
+        // rank a same-turn bomb detonation *also* swept away is already
+        // gone from tileValue by the time this runs - its removal/fade
+        // plays separately, via playBombRemovals instead.
         const value = tileValue[winnerId];
         const isMilestone = milestoneIds && milestoneIds.has(winnerId);
         paintTileScaled(face, value);
@@ -965,8 +1128,49 @@
     }
   }
 
+  // Detonates every tile a bomb (or chain of bombs) just cleared: a burst at
+  // each bomb's own position, then everything in the batch (the bomb(s) and
+  // every same-rank tile) fades and shrinks away in place - there's no
+  // winner for them to slide toward, unlike an ordinary merge. Positions
+  // come from tilePosBefore since these ids are already gone from the live
+  // tilePos/grid (resolveBombDetonations already removed them) by the time
+  // this plays.
+  function playBombRemovals(events, removedIds, boardEl) {
+    for (const { bombId } of events) {
+      const wrap = elById.get(bombId);
+      if (wrap) spawnMilestoneGlowWheel(wrap, boardEl);
+    }
+    for (const id of removedIds) {
+      const wrap = elById.get(id);
+      if (!wrap) continue;
+      const face = faceOf(wrap);
+      face.style.transition = `opacity ${BOMB_POP_MS}ms ease, transform ${BOMB_POP_MS}ms ease`;
+      face.style.opacity = '0';
+      face.style.transform = 'scale(0.3)';
+      setTimeout(() => {
+        wrap.remove();
+        elById.delete(id);
+      }, BOMB_POP_MS);
+    }
+  }
+
+  // Slides every surviving tile to its (possibly new) cell after a
+  // detonation closed some gaps - the same plain position transition the
+  // main fall stage uses, just triggered by a removal instead of a rotation.
+  function slideSurvivorsTo(newTilePosMap, ms) {
+    for (const idStr in newTilePosMap) {
+      const id = Number(idStr);
+      const wrap = elById.get(id);
+      if (!wrap) continue;
+      setTilePosTransition(wrap, ms);
+      const [a, b] = newTilePosMap[id];
+      const { left, top } = cellPos(a, b);
+      wrap.style.transform = `translate(${left}px, ${top}px)`;
+    }
+  }
+
   function updateScoreDisplay(animatePop) {
-    const newScore = boardScore(tileValue).toLocaleString();
+    const newScore = boardScoreWheel(tileValue).toLocaleString();
     if (newScore === scoreValueEl.textContent) return;
     scoreValueEl.textContent = newScore;
     if (animatePop) {
@@ -1017,7 +1221,7 @@
     highestMatchValue = 0;
 
     nextValue = drawNextValue();
-    renderNextIndicator(nextIndicatorEl, nextValue, TRIPLE_HINT_CHANCE);
+    renderNextIndicatorWheel(nextIndicatorEl, nextValue, TRIPLE_HINT_CHANCE);
     updatePageBackground(highestMatchValue);
     updateScoreDisplay(false);
     overlayEl.classList.add('hidden');
@@ -1081,6 +1285,22 @@
     const loserFinalPos = {};
     for (const { loserId } of fallResult.allMerges) loserFinalPos[loserId] = settledTilePos[finalSurvivorOf(loserId)];
     tilePos = settledTilePos;
+
+    // A resting bomb this rotation's fall just brought into contact with a
+    // match detonates now, before the spawn zone below is even computed -
+    // mirrors how the fall's own merges resolve first, and matters here
+    // because clearing tiles can change which cells count as "empty". Grid
+    // (the real occupancy map the spawn zone reads from just below) is
+    // updated right away; `tilePos` deliberately stays untouched by this -
+    // it still drives animateMoveWheel's own "survivors glide" call below,
+    // which needs to land everything at its *pre-detonation* position first
+    // (unaffected ids' entries are identical either way; a detonation-doomed
+    // id's stale entry here is just a harmless glide-to-itself, since its
+    // real removal/pop is a separate, later-timed step - see
+    // postFallBombTilePos below, used only for that).
+    const fallBomb = resolveBombDetonations(grid, tileValue);
+    const postFallBombTilePos = {};
+    for (const [key, id] of grid) postFallBombTilePos[id] = parseKey(key);
 
     // Spawn zone: the lowest *empty* cell in each column - directly on top of
     // that column's current heap (the bottom cell, for a column that's empty
@@ -1153,6 +1373,19 @@
       }
     }
 
+    // The spawned tile itself detonating (a bomb landing on a match) is
+    // just as likely here as any other spawn-landing merge above - but
+    // never *is* one, since a bomb never merges through the normal system
+    // (see canMergeWheel), so this is a wholly separate check, same as the
+    // fall's own bomb check above. Same reasoning as postFallBombTilePos:
+    // `tilePos` (in particular, tilePos[spawnedId] - the spawn's own
+    // landing spot, needed below to even create its DOM element) stays as
+    // it already was, untouched by this; the detonation's own compaction
+    // only shows up later, via postSpawnBombTilePos below.
+    const spawnBomb = resolveBombDetonations(grid, tileValue);
+    const postSpawnBombTilePos = {};
+    for (const [key, id] of grid) postSpawnBombTilePos[id] = parseKey(key);
+
     let milestoneIds = null;
     const newMax = currentMaxValue(tileValue);
     if (newMax > recordMax) {
@@ -1163,6 +1396,7 @@
     if (fallResult.allMerges.length > 0 || spawnMerges.length > 0) {
       hapticTick(milestoneIds && milestoneIds.size > 0 ? [15, 40, 15] : 20);
     }
+    if (fallBomb.events.length > 0 || spawnBomb.events.length > 0) hapticTick([20, 50, 20]);
 
     // Stage 2's travel speed: applied to every tile currently on the board
     // (not the not-yet-created spawn) right before animateMoveWheel moves any
@@ -1176,6 +1410,15 @@
       if (loserIds.has(id)) setLoserFaceTransition(faceOf(wrap), FALL_MS);
     }
 
+    // How long the fall's own merges take to visually resolve - the moment
+    // a fall-triggered detonation's pop should start (right where the spawn
+    // used to appear, before extraSpawnDelayMs below pushed it back), and
+    // how long the detonation itself then adds on top before the spawn
+    // actually shows up.
+    const fallMergeSettleMs = fallResult.allMerges.length > 0 ? FALL_MS + WINNER_FLIP_MS : FALL_MS;
+    const fallBombMs = fallBomb.removedIds.size > 0 ? BOMB_POP_MS + FALL_MS : 0;
+    const spawnBombMs = spawnBomb.removedIds.size > 0 ? BOMB_POP_MS + FALL_MS : 0;
+
     animateMoveWheel({
       elById, tileValue, tilePos, allMerges: fallResult.allMerges, loserFinalPos, spawnedId, spawnValue,
       boardEl, cellPos, createTileEl: makeTileEl, milestoneIds, spawnEnterFrom,
@@ -1186,14 +1429,36 @@
       // short transition would look like a snap rather than a fall.
       spawnSlideMs: FALL_MS,
       spawnMerges, spawnLoserFinalPos,
+      // A fall-triggered detonation needs to finish (pop, then close its own
+      // gaps) before the spawn appears at all - see postFallBombTilePos.
+      extraSpawnDelayMs: fallBombMs,
+      // Once the spawn side of this turn (its own slide-in, plus its own
+      // landing merge if any) has fully settled, play the spawn's own
+      // detonation, if it had one (see postSpawnBombTilePos).
+      onSpawnSettled: spawnBomb.removedIds.size > 0 ? () => {
+        playBombRemovals(spawnBomb.events, spawnBomb.removedIds, boardEl);
+        setTimeout(() => slideSurvivorsTo(postSpawnBombTilePos, FALL_MS), BOMB_POP_MS);
+      } : undefined,
     });
-    renderNextIndicator(nextIndicatorEl, nextValue, TRIPLE_HINT_CHANCE);
+
+    // A fall-triggered detonation plays right where the fall's own merges
+    // just settled - i.e. right where the spawn used to appear before
+    // extraSpawnDelayMs (above) pushed it back to make room for this.
+    if (fallBomb.removedIds.size > 0) {
+      setTimeout(() => {
+        playBombRemovals(fallBomb.events, fallBomb.removedIds, boardEl);
+        setTimeout(() => slideSurvivorsTo(postFallBombTilePos, FALL_MS), BOMB_POP_MS);
+      }, fallMergeSettleMs);
+    }
+
+    renderNextIndicatorWheel(nextIndicatorEl, nextValue, TRIPLE_HINT_CHANCE);
     updatePageBackground(highestMatchValue);
     updateScoreDisplay(true);
 
-    const settleMs = (fallResult.allMerges.length > 0 ? FALL_MS + WINNER_FLIP_MS : FALL_MS) + 30
+    const settleMs = fallMergeSettleMs + 30 + fallBombMs
       + (spawnCells.length > 0 ? FALL_MS : 0) // the spawn's own fall-in
-      + (spawnMerges.length > 0 ? WINNER_FLIP_MS : 0); // its landing-merge pop, if any
+      + (spawnMerges.length > 0 ? WINNER_FLIP_MS : 0) // its landing-merge pop, if any
+      + spawnBombMs; // the spawn's own detonation, if it had one
     setTimeout(() => {
       rotating = false;
       if (isWheelGameOver()) {
