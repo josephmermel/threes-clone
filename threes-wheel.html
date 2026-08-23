@@ -280,20 +280,35 @@
     if (matchValue < 3) return 2;
     return Math.min(SPAWN_CAP, Math.max(3, matchValue / 4));
   }
-  const LOW_SLOT = Symbol('low');
-  function pickSpawnValueForCap(cap) {
-    const entries = [{ v: LOW_SLOT, w: LOW_VALUE_BOOST * 2 }];
+  // 1 and 2 are two separate entries (equal weight each, summing to the same
+  // LOW_VALUE_BOOST*2 total the old combined-then-coin-flipped slot had) so
+  // an anti-streak exclusion (see recordSpawn/lastSpawnValue below) can drop
+  // just one of them from consideration without touching the other.
+  function pickSpawnValueForCap(cap, excludeValue) {
+    const entries = [{ v: 1, w: LOW_VALUE_BOOST }, { v: 2, w: LOW_VALUE_BOOST }];
     for (let v = 3, i = 0; v <= cap; v *= 2, i++) entries.push({ v, w: Math.pow(CHAIN_DECAY, i + 1) });
-    const total = entries.reduce((sum, e) => sum + e.w, 0);
+    const pool = excludeValue == null ? entries : entries.filter(e => e.v !== excludeValue);
+    const total = pool.reduce((sum, e) => sum + e.w, 0);
     let r = Math.random() * total;
-    for (const e of entries) {
+    for (const e of pool) {
       r -= e.w;
-      if (r < 0) return e.v === LOW_SLOT ? (Math.random() < 0.5 ? 1 : 2) : e.v;
+      if (r < 0) return e.v;
     }
-    return entries[entries.length - 1].v;
+    return pool[pool.length - 1].v;
   }
-  function pickSpawnValue(matchValue) {
-    return pickSpawnValueForCap(maxSpawnValue(matchValue));
+  function pickSpawnValue(matchValue, excludeValue) {
+    return pickSpawnValueForCap(maxSpawnValue(matchValue), excludeValue);
+  }
+
+  // No more than 3 consecutive spawns of the same value (the same rule the
+  // player would want for any value, but it's most noticeable for 1 and 2,
+  // which is most of what a spawn draws to begin with) - once a run hits 3,
+  // that value is excluded from the *next* draw only, then eligible again.
+  let lastSpawnValue = null;
+  let lastSpawnStreak = 0;
+  function recordSpawn(value) {
+    if (value === lastSpawnValue) lastSpawnStreak++;
+    else { lastSpawnValue = value; lastSpawnStreak = 1; }
   }
 
   const boardEl = document.getElementById('board');
@@ -623,8 +638,9 @@
     return pickSpawnValueForCap(STARTER_CAP);
   }
   function drawNextValue() {
-    if (Math.random() < WILDCARD_CHANCE) return WILD;
-    return pickSpawnValue(highestMatchValue);
+    const blocked = lastSpawnStreak >= 3 ? lastSpawnValue : null;
+    if (blocked !== WILD && Math.random() < WILDCARD_CHANCE) return WILD;
+    return pickSpawnValue(highestMatchValue, blocked);
   }
 
   function emptyKeys() {
@@ -872,6 +888,8 @@
     idCounter = 1;
     rotating = false;
     queuedMove = null;
+    lastSpawnValue = null;
+    lastSpawnStreak = 0;
 
     boardEl.innerHTML = '';
     cellBgEls = [];
@@ -983,6 +1001,7 @@
       const [q, r] = parseKey(key);
       const id = idCounter++;
       grid.set(key, id);
+      recordSpawn(nextValue);
       tileValue[id] = nextValue;
       tilePos[id] = [q, r];
       spawnedId = id;
