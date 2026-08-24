@@ -194,6 +194,7 @@
       </div>
       <div id="header-actions">
         <button class="icon-btn" id="fullscreen-btn" title="Fullscreen" aria-label="Toggle fullscreen">⛶</button>
+        <button class="game-btn" id="scores-btn">Scores</button>
         <button class="game-btn" id="restart-btn">Restart</button>
       </div>
     </div>
@@ -211,14 +212,20 @@
         <div id="overlay" class="hidden">
           <div id="overlay-text">Game Over</div>
           <button class="game-btn" id="overlay-restart">Try Again</button>
+          <div id="leaderboard-panel"></div>
         </div>
       </div>
     </div>
   </div>
 
+<script src="firebase-config.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.13.2/firebase-app-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.13.2/firebase-firestore-compat.js"></script>
+<script src="leaderboard.js"></script>
 <script src="threes-common.js"></script>
 <script>
 (function () {
+  const VARIANT = 'wheel';
   const {
     WILD, canMerge, mergeValue, partnerValue, pickRandom, cellKey, parseKey,
     currentMaxValue, scoreForValue, triplesContaining,
@@ -373,6 +380,7 @@
   const nextIndicatorEl = document.getElementById('next-indicator');
   const overlayEl = document.getElementById('overlay');
   const overlayTextEl = document.getElementById('overlay-text');
+  const leaderboardPanelEl = document.getElementById('leaderboard-panel');
 
   // --- Board geometry (axial coords q,r) - same 19-cell hexagon-of-hexagons
   // as the other hex variant. ---
@@ -1537,6 +1545,7 @@
       if (isWheelGameOver()) {
         overlayTextEl.textContent = 'Game Over';
         overlayEl.classList.remove('hidden');
+        Leaderboard.showGameOverPanel(leaderboardPanelEl, { variant: VARIANT, score: boardScoreWheel(tileValue), highestTile: recordMax });
         queuedMove = null;
         hapticTick([30, 60, 30]);
       } else {
@@ -1830,6 +1839,24 @@
   document.getElementById('overlay-restart').addEventListener('click', startGame);
   attachFullscreenToggle(document.getElementById('fullscreen-btn'));
   attachDropdownMenu(document.getElementById('brand-btn'), document.getElementById('variant-menu'));
+
+  // Lets a player check the board any time, not just after losing - reuses
+  // the same #overlay the game-over panel does, just with "Try Again" hidden
+  // (viewing scores shouldn't look like it's offering to reset an
+  // in-progress game) and its own Close button instead.
+  document.getElementById('scores-btn').addEventListener('click', () => {
+    if (!overlayEl.classList.contains('hidden')) return;
+    const overlayRestartBtn = document.getElementById('overlay-restart');
+    const prevText = overlayTextEl.textContent;
+    overlayTextEl.textContent = 'Scores';
+    overlayRestartBtn.style.display = 'none';
+    overlayEl.classList.remove('hidden');
+    Leaderboard.showViewerPanel(leaderboardPanelEl, VARIANT, () => {
+      overlayEl.classList.add('hidden');
+      overlayTextEl.textContent = prevText;
+      overlayRestartBtn.style.display = '';
+    });
+  });
 
   startGame();
 })();
