@@ -781,6 +781,117 @@
   // so a fast double-swipe feels absorbed instead of silently dropped.
   let queuedMove = null;
 
+  // --- Fast-forwarding a still-animating move, so a new touch during the
+  // fall/spawn stage is never just silently ignored (see fastForwardCurrentMove
+  // below, and mainEl's pointerdown handler further down). Every setTimeout
+  // scheduled as part of resolving a move's visuals goes through
+  // scheduleMoveTimer instead of the bare global, so they can all be
+  // cancelled in one shot; purely decorative cleanup (a glow burst removing
+  // itself) doesn't need to be tracked, since leaving one to finish on its
+  // own is harmless. ---
+  let pendingMoveTimers = [];
+  function scheduleMoveTimer(fn, ms) {
+    const id = setTimeout(fn, ms);
+    pendingMoveTimers.push(id);
+    return id;
+  }
+  function clearPendingMoveTimers() {
+    for (const id of pendingMoveTimers) clearTimeout(id);
+    pendingMoveTimers.length = 0;
+  }
+  // True once startFallPhase has synchronously resolved grid/tileValue for
+  // the move currently animating - i.e. once the *visuals* are all that's
+  // left to catch up, which is what fastForwardCurrentMove actually knows
+  // how to skip. False during a rotation tween itself (very short - 120-
+  // 160ms - regardless of whether it's the button/keyboard path or a
+  // committing drag's snap), which intentionally isn't fast-forwardable:
+  // it always finishes on its own almost immediately anyway.
+  let fallPhaseStarted = false;
+  // Set by a committing drag's tween once it lands, right before the usual
+  // ROTATE_PAUSE_MS beat before startFallPhase - see finishDrag. Nulled out
+  // the instant it's resolved (by whichever fires first: the normal timer,
+  // or a fast-forward), so a late duplicate call is always a safe no-op.
+  let pendingRotationResolve = null;
+  function resolvePendingRotation() {
+    if (!pendingRotationResolve) return;
+    const resolve = pendingRotationResolve;
+    pendingRotationResolve = null;
+    resolve();
+  }
+  // Snaps every tile straight to its truly final resting state - position,
+  // painted value, no leftover merge-pop/explode/flip class or transform -
+  // and drops every remaining scheduled animation step. Safe to call any
+  // time fallPhaseStarted is true: grid/tileValue are already fully
+  // resolved by the point startFallPhase returns (all of that is
+  // synchronous; only the *animation* catching up to it is scheduled), so
+  // this never needs to recompute anything, just catch the DOM up to what
+  // the game state already says.
+  function snapBoardToFinalState() {
+    clearPendingMoveTimers();
+    const finalPosById = {};
+    for (const [key, id] of grid) finalPosById[id] = parseKey(key);
+    for (const [id, wrap] of [...elById]) {
+      if (!(id in tileValue)) { wrap.remove(); elById.delete(id); }
+    }
+    for (const idStr in tileValue) {
+      const id = Number(idStr);
+      const [q, r] = finalPosById[id];
+      const { left, top } = cellPos(q, r);
+      let wrap = elById.get(id);
+      if (!wrap) {
+        wrap = makeTileEl(tileValue[id], q, r, false);
+        boardEl.appendChild(wrap);
+        elById.set(id, wrap);
+        continue;
+      }
+      wrap.style.transition = 'none';
+      wrap.style.zIndex = '';
+      wrap.style.transform = `translate(${left}px, ${top}px)`;
+      const face = faceOf(wrap);
+      face.style.transition = 'none';
+      face.style.animation = 'none';
+      face.classList.remove('merging', 'milestone-pop', 'bomb-explode', 'wild-winner-flip', 'wild-loser-flip', 'spawning');
+      face.style.opacity = '';
+      face.style.transform = '';
+      paintTileScaled(face, tileValue[id]);
+      void face.offsetWidth; // commit the snap before re-enabling transitions/animations below, so it isn't itself animated
+      face.style.transition = '';
+      face.style.animation = '';
+    }
+  }
+  // Called when fresh input (a new touch) arrives while a previous move is
+  // still animating. If the fall/spawn stage has already started, resolves
+  // it instantly instead of making the player wait out the rest of it - see
+  // snapBoardToFinalState. If we're still in the brief rotation-tween
+  // window (fallPhaseStarted false and no pendingRotationResolve yet),
+  // this is a safe no-op - that stage is short enough it isn't worth
+  // fast-forwarding, and finishes into the fall/spawn stage on its own a
+  // moment later regardless. Returns true if this ended the game (in which
+  // case the caller shouldn't go on to start a new drag).
+  function fastForwardCurrentMove() {
+    if (!rotating) return false;
+    clearPendingMoveTimers(); // explicit cancel (not just letting a stale one fire later as a no-op) of whatever's pending right now, e.g. the ROTATE_PAUSE_MS beat below
+    if (pendingRotationResolve) {
+      resolvePendingRotation(); // runs startFallPhase(...) right now instead of waiting out ROTATE_PAUSE_MS - schedules its own fresh batch of timers
+    } else if (!fallPhaseStarted) {
+      return false;
+    }
+    snapBoardToFinalState(); // also cancels whatever startFallPhase (if just invoked above) or the prior fall/spawn stage scheduled
+    rotating = false;
+    fallPhaseStarted = false;
+    // Whoever called this is about to supply fresh input themselves -
+    // don't let a stale queued button/key press fire in its place.
+    queuedMove = null;
+    if (isWheelGameOver()) {
+      overlayTextEl.textContent = 'Game Over';
+      overlayEl.classList.remove('hidden');
+      Leaderboard.showGameOverPanel(leaderboardPanelEl, { variant: VARIANT, score: boardScoreWheel(tileValue), highestTile: recordMax });
+      hapticTick([30, 60, 30]);
+      return true;
+    }
+    return false;
+  }
+
   function drawStarterValue() {
     return pickSpawnValueForCap(STARTER_CAP);
   }
@@ -1068,12 +1179,12 @@
 
       if (loserWasWild) {
         face.classList.add('wild-loser-flip');
-        setTimeout(() => paintNumeralScaled(face, revealValue), Math.round(loserFlipMs * 0.5));
+        scheduleMoveTimer(() => paintNumeralScaled(face, revealValue), Math.round(loserFlipMs * 0.5));
       } else {
         face.style.opacity = '0';
         face.style.transform = 'scale(0.4)';
       }
-      setTimeout(() => {
+      scheduleMoveTimer(() => {
         wrap.remove();
         elById.delete(loserId);
       }, loserFlipMs);
@@ -1093,11 +1204,11 @@
       const meta = winnerMeta.get(id);
       if (meta && meta.winnerWasWild) {
         // Card-flip from wildcard to the resulting number as the merge lands.
-        setTimeout(() => {
+        scheduleMoveTimer(() => {
           face.classList.remove('merging');
           face.classList.add('wild-winner-flip');
-          setTimeout(() => paintTileScaled(face, meta.newValue), Math.round(winnerFlipMs * 0.5));
-          setTimeout(() => face.classList.remove('wild-winner-flip'), winnerFlipMs);
+          scheduleMoveTimer(() => paintTileScaled(face, meta.newValue), Math.round(winnerFlipMs * 0.5));
+          scheduleMoveTimer(() => face.classList.remove('wild-winner-flip'), winnerFlipMs);
         }, slideMs);
       } else if (meta && tileValue[id] !== undefined) {
         // A merge winner that a same-turn bomb detonation *also* swept away
@@ -1106,7 +1217,7 @@
         // removal/fade plays separately, via playBombRemovals instead.
         const value = tileValue[id];
         const isMilestone = milestoneIds && milestoneIds.has(id);
-        setTimeout(() => {
+        scheduleMoveTimer(() => {
           paintTileScaled(face, value);
           face.classList.remove('merging', 'milestone-pop');
           void face.offsetWidth;
@@ -1120,7 +1231,7 @@
     // tile appear, sliding in from just beyond the edge in the swipe's direction.
     if (spawnedId != null) {
       const spawnDelay = (allMerges.length > 0 ? slideMs + winnerFlipMs : slideMs) + extraSpawnDelayMs;
-      setTimeout(() => {
+      scheduleMoveTimer(() => {
         const [a, b] = tilePos[spawnedId];
         // Paint with spawnValue (its value *before* any landing-merge), not
         // tileValue[spawnedId] - if it goes on to merge away below, that
@@ -1149,12 +1260,12 @@
         // startFallPhase). Skipped entirely if it didn't land on a match.
         const mergeDelay = spawnEnterFrom ? (spawnSlideMs != null ? spawnSlideMs : 0) : 0;
         if (spawnMerges && spawnMerges.length > 0) {
-          setTimeout(() => {
+          scheduleMoveTimer(() => {
             playMergeEvents(spawnMerges, spawnLoserFinalPos, tileValue, milestoneIds, boardEl);
-            if (onSpawnSettled) setTimeout(onSpawnSettled, winnerFlipMs);
+            if (onSpawnSettled) scheduleMoveTimer(onSpawnSettled, winnerFlipMs);
           }, mergeDelay);
         } else if (onSpawnSettled) {
-          setTimeout(onSpawnSettled, mergeDelay);
+          scheduleMoveTimer(onSpawnSettled, mergeDelay);
         }
       }, spawnDelay);
     } else if (onSpawnSettled) {
@@ -1193,12 +1304,12 @@
 
       if (loserWasWild) {
         face.classList.add('wild-loser-flip');
-        setTimeout(() => paintNumeralScaled(face, revealValue), Math.round(LOSER_FLIP_MS * 0.5));
+        scheduleMoveTimer(() => paintNumeralScaled(face, revealValue), Math.round(LOSER_FLIP_MS * 0.5));
       } else {
         face.style.opacity = '0';
         face.style.transform = 'scale(0.4)';
       }
-      setTimeout(() => {
+      scheduleMoveTimer(() => {
         wrap.remove();
         elById.delete(loserId);
       }, LOSER_FLIP_MS);
@@ -1212,8 +1323,8 @@
       if (m.winnerWasWild) {
         face.classList.remove('merging');
         face.classList.add('wild-winner-flip');
-        setTimeout(() => paintTileScaled(face, m.newValue), Math.round(WINNER_FLIP_MS * 0.5));
-        setTimeout(() => face.classList.remove('wild-winner-flip'), WINNER_FLIP_MS);
+        scheduleMoveTimer(() => paintTileScaled(face, m.newValue), Math.round(WINNER_FLIP_MS * 0.5));
+        scheduleMoveTimer(() => face.classList.remove('wild-winner-flip'), WINNER_FLIP_MS);
       } else if (tileValue[winnerId] !== undefined) {
         // Same guard as animateMoveWheel's survivor repaint: a winner whose
         // rank a same-turn bomb detonation *also* swept away is already
@@ -1258,7 +1369,7 @@
       face.classList.remove('merging', 'milestone-pop');
       void face.offsetWidth; // force layout so a tile mid-merge-pop restarts cleanly into this animation instead of blending with it
       face.classList.add('bomb-explode');
-      setTimeout(() => {
+      scheduleMoveTimer(() => {
         wrap.remove();
         elById.delete(id);
       }, BOMB_POP_MS);
@@ -1370,6 +1481,8 @@
   // (rotation) has fully settled, from a fixed pause after it, regardless of
   // whether that rotation was an instant button/key press or a released drag.
   function startFallPhase(newGrid, newTilePos) {
+    fallPhaseStarted = true;
+    pendingMoveTimers.length = 0; // previous move's timers have all long since fired by this point - just avoiding unbounded growth across a long session
     grid = newGrid;
     tilePos = newTilePos;
 
@@ -1548,7 +1661,7 @@
       // detonation, if it had one (see postSpawnBombTilePos).
       onSpawnSettled: spawnBomb.removedIds.size > 0 ? () => {
         playBombRemovals(spawnBomb.events, spawnBomb.removedIds, boardEl);
-        setTimeout(() => slideSurvivorsTo(postSpawnBombTilePos, FALL_MS), BOMB_POP_MS + BOMB_PAUSE_MS);
+        scheduleMoveTimer(() => slideSurvivorsTo(postSpawnBombTilePos, FALL_MS), BOMB_POP_MS + BOMB_PAUSE_MS);
       } : undefined,
     });
 
@@ -1556,9 +1669,9 @@
     // just settled - i.e. right where the spawn used to appear before
     // extraSpawnDelayMs (above) pushed it back to make room for this.
     if (fallBomb.removedIds.size > 0) {
-      setTimeout(() => {
+      scheduleMoveTimer(() => {
         playBombRemovals(fallBomb.events, fallBomb.removedIds, boardEl);
-        setTimeout(() => slideSurvivorsTo(postFallBombTilePos, FALL_MS), BOMB_POP_MS + BOMB_PAUSE_MS);
+        scheduleMoveTimer(() => slideSurvivorsTo(postFallBombTilePos, FALL_MS), BOMB_POP_MS + BOMB_PAUSE_MS);
       }, fallMergeSettleMs);
     }
 
@@ -1570,8 +1683,9 @@
       + (spawnCells.length > 0 ? FALL_MS : 0) // the spawn's own fall-in
       + (spawnMerges.length > 0 ? WINNER_FLIP_MS : 0) // its landing-merge pop, if any
       + spawnBombMs; // the spawn's own detonation, if it had one
-    setTimeout(() => {
+    scheduleMoveTimer(() => {
       rotating = false;
+      fallPhaseStarted = false;
       if (isWheelGameOver()) {
         overlayTextEl.textContent = 'Game Over';
         overlayEl.classList.remove('hidden');
@@ -1630,6 +1744,7 @@
     if (!overlayEl.classList.contains('hidden')) return;
     if (rotating || drag) { queuedMove = dir; return; }
     rotating = true;
+    fallPhaseStarted = false;
     hapticTick(10);
     beginRotation(dir, live);
   }
@@ -1774,12 +1889,18 @@
     }
   }
 
-  // Pointerdown/move keep tracking even while the board is busy (rotating),
-  // so a swipe that starts mid-animation isn't just silently ignored - it
-  // still gets its direction read, just with no live preview to animate
-  // (see the `rotating` checks below); finishDrag then queues or fires it.
+  // A touch that arrives while the *previous* move is still animating its
+  // fall/spawn stage doesn't wait it out or get dropped - fastForwardCurrentMove
+  // resolves that move to its final state right now, so live tracking below
+  // can start immediately on this same press instead of requiring a lift and
+  // a fresh pointerdown once things visually settle. Only the brief rotation-
+  // tween window itself (fallPhaseStarted still false) isn't fast-forwarded -
+  // see fastForwardCurrentMove for why that's fine to leave as-is: the swipe's
+  // direction still gets read below, just without a live preview until that
+  // tween lands on its own a moment later.
   mainEl.addEventListener('pointerdown', (e) => {
     if (!overlayEl.classList.contains('hidden')) return;
+    if (rotating && fastForwardCurrentMove()) return; // that fast-forward just ended the game - don't start a new drag
     const rect = boardEl.getBoundingClientRect();
     const center = { x: rect.left + rect.width / 2, y: rect.top + rect.height / 2 };
     drag = { center, startAngle: angleFromCenter(e.clientX, e.clientY, center), dir: null, startCenters: null, progressDeg: 0 };
@@ -1844,6 +1965,7 @@
     }
 
     rotating = true;
+    fallPhaseStarted = false;
     const sign = dir === 'CW' ? 1 : -1;
     // Any net progress in the chosen direction commits at least the first
     // stop; a backtrack to zero cancels entirely. Past the halfway point
@@ -1858,8 +1980,16 @@
     const newGrid = steps === 2 ? newGrid2 : newGrid1;
     const newTilePos = steps === 2 ? newTilePos2 : newTilePos1;
     tweenArc(startCenters, sign * progressDeg, targetDeg, DRAG_SNAP_MS, () => {
-      if (committing) setTimeout(() => startFallPhase(newGrid, newTilePos), ROTATE_PAUSE_MS);
-      else { rotating = false; consumeQueuedMove(); }
+      if (committing) {
+        // Stashed rather than fired directly, so a new touch arriving in
+        // this last short beat before the fall/spawn stage even starts can
+        // resolve it immediately too - see fastForwardCurrentMove.
+        pendingRotationResolve = () => startFallPhase(newGrid, newTilePos);
+        scheduleMoveTimer(resolvePendingRotation, ROTATE_PAUSE_MS);
+      } else {
+        rotating = false;
+        consumeQueuedMove();
+      }
     });
   }
   mainEl.addEventListener('pointerup', finishDrag);
