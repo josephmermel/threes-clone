@@ -222,7 +222,7 @@
   const {
     WILD, canMerge, mergeValue, partnerValue, pickRandom, cellKey, parseKey,
     currentMaxValue, scoreForValue, triplesContaining,
-    paintTile, paintNumeral, miniFontSize, updatePageBackground,
+    paintTile, paintNumeral, miniFontSize, tileColor, updatePageBackground,
     attachFullscreenToggle, attachDropdownMenu,
   } = ThreesCommon;
 
@@ -259,7 +259,7 @@
   // merging into a new value the way every other tile (including the
   // wildcard) does.
   const BOMB = 'B';
-  const BOMB_CHANCE = 0.05;
+  const BOMB_CHANCE = 0.1;
   const BOMB_POP_MS = 600;   // detonation: explode, hold, then vanish - its own distinct beat
   const BOMB_PAUSE_MS = 180; // stillness after the pop, before gravity closes the gaps - echoes ROTATE_PAUSE_MS's role between stages
   const TRIPLE_HINT_CHANCE = 0.6;
@@ -1202,9 +1202,15 @@
   // already gone from tileValue/grid (resolveBombDetonations already
   // removed them) by the time this plays.
   function playBombRemovals(events, removedIds, boardEl) {
-    for (const { bombId } of events) {
+    for (const { bombId, rank } of events) {
       const wrap = elById.get(bombId);
-      if (wrap) spawnColoredGlow(wrap, boardEl, 'rgba(255,140,60,0.95)');
+      if (!wrap) continue;
+      // Recolor the bomb to the rank it just matched, right as it goes off -
+      // makes it obvious *what* it detonated against, not just that
+      // something did. Set before the burst below so its own glow (which
+      // reads straight off this background) picks up the same color too.
+      faceOf(wrap).style.background = tileColor(rank).bg;
+      spawnColoredGlow(wrap, boardEl, 'rgba(255,140,60,0.95)');
     }
     for (const id of removedIds) {
       const wrap = elById.get(id);
