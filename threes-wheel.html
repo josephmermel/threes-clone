@@ -264,9 +264,20 @@
   // A bomb detonates whatever rank it lands on/next to - see canMergeWheel,
   // findBombDetonation, and resolveBombDetonations below - rather than
   // merging into a new value the way every other tile (including the
-  // wildcard) does.
+  // wildcard) does. Simulated across hundreds of random-play games (see
+  // session notes): a flat chance at any strength thins the board far more
+  // than it looks like it should, because one detonation clears an entire
+  // rank at once rather than one tile - so instead of just tuning the
+  // number down, the chance itself now depends on where the game actually
+  // is - see currentBombChance below.
   const BOMB = 'B';
-  const BOMB_CHANCE = 0.05;
+  const BOMB_CHANCE_MAX = 0.05;
+  // Fraction of the board that must already be filled before bombs are even
+  // eligible to spawn - see currentBombChance below. A hard floor on top of
+  // the ramp, not a replacement for it: keeps one unlucky early detonation
+  // from compounding into the board never recovering, at any point in the
+  // game, not just the opening.
+  const BOMB_MIN_FILL_RATIO = 1 / 3;
   const BOMB_POP_MS = 600;   // detonation: explode, hold, then vanish - its own distinct beat
   const BOMB_PAUSE_MS = 180; // stillness after the pop, before gravity closes the gaps - echoes ROTATE_PAUSE_MS's role between stages
   const TRIPLE_HINT_CHANCE = 0.6;
@@ -324,6 +335,11 @@
   // --- Tile spawn distribution (tuned looser than the hex variant - see
   // maxSpawnValue/LOW_VALUE_BOOST/CHAIN_DECAY below for why) ----------------
   const SPAWN_CAP = 96;
+  // Bomb chance reaches full strength (BOMB_CHANCE_MAX) once the player has
+  // matched a tile this high - reuses the same milestone spawn difficulty
+  // already caps out at, rather than a separate number - see
+  // currentBombChance below.
+  const BOMB_RAMP_TARGET_VALUE = SPAWN_CAP;
   // Lower than the hex variant's 1.8/0.55: this variant's fall-and-cascade
   // gravity burns through 1s and 2s faster than a one-step slide does, so the
   // same weighting read as far more 1/2-heavy here - a flat 50/50 split
@@ -768,10 +784,24 @@
   function drawStarterValue() {
     return pickSpawnValueForCap(STARTER_CAP);
   }
+  // 0 before the board is at least a third full (BOMB_MIN_FILL_RATIO) or
+  // before the player has made a single merge - otherwise ramps linearly in
+  // *rungs* of the doubling chain (not raw value, which would front-load
+  // almost the whole ramp into the first couple of merges) from there up to
+  // BOMB_CHANCE_MAX by BOMB_RAMP_TARGET_VALUE. Re-evaluated on every draw
+  // rather than cached, so it also responds to the board thinning back out
+  // below the fill floor mid-game, not just the opening.
+  function currentBombChance() {
+    if (grid.size / ALL_KEYS.length < BOMB_MIN_FILL_RATIO) return 0;
+    if (highestMatchValue < 3) return 0;
+    const rank = Math.log2(highestMatchValue / 3);
+    const targetRank = Math.log2(BOMB_RAMP_TARGET_VALUE / 3);
+    return BOMB_CHANCE_MAX * Math.min(1, rank / targetRank);
+  }
   function drawNextValue() {
     const blocked = lastSpawnStreak >= 4 ? lastSpawnValue : null;
     if (blocked !== WILD && Math.random() < WILDCARD_CHANCE) return WILD;
-    if (blocked !== BOMB && Math.random() < BOMB_CHANCE) return BOMB;
+    if (blocked !== BOMB && Math.random() < currentBombChance()) return BOMB;
     return pickSpawnValue(highestMatchValue, blocked);
   }
 
